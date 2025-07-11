@@ -1,2 +1,5 @@
 *.csv
 *.html
+.env
+diff.patch
+.DS_Store

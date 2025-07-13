@@ -121,17 +121,20 @@ ORDER BY race_key, lane, position_txt;  -- “公式順位行” が先に来る
 
 /* 前検情報 */
 CREATE MATERIALIZED VIEW IF NOT EXISTS core.boat_info AS
-SELECT  core.f_race_key(race_date, race_no, '若松') AS race_key,
+SELECT  DISTINCT ON (race_key, lane)
+        core.f_race_key(race_date, race_no, '若松') AS race_key,
         lane,
         racer_id,
         CAST(regexp_replace(weight_raw, '[^0-9.]', '', 'g') AS NUMERIC) AS weight,
         exh_time,
         tilt_deg
-FROM raw.racers;
+FROM   raw.racers
+ORDER  BY race_key, lane;
 
 /* スタート展示 */
 CREATE MATERIALIZED VIEW IF NOT EXISTS core.start_exh AS
-SELECT  core.f_race_key(race_date, race_no, '若松') AS race_key,
+SELECT  DISTINCT ON (race_key, lane)
+        core.f_race_key(race_date, race_no, '若松') AS race_key,
         lane,
         (substr(st_raw,1,1) = 'F')                          AS fs_flag,
         (
@@ -139,22 +142,26 @@ SELECT  core.f_race_key(race_date, race_no, '若松') AS race_key,
           / 100          --  ← ここまで計算してから
         )::NUMERIC(4,2)  --  ← キャスト
         AS st_time
-FROM raw.start_exhibition;
+FROM   raw.start_exhibition
+ORDER  BY race_key, lane;
 
 /* 天候 */
 CREATE MATERIALIZED VIEW IF NOT EXISTS core.weather AS
-SELECT  core.f_race_key(race_date, race_no, '若松') AS race_key,
+SELECT  DISTINCT ON (race_key)
+        core.f_race_key(race_date, race_no, '若松') AS race_key,
         NULLIF(regexp_replace(air_temp_raw   ,'[^0-9.]','','g'), '')::NUMERIC AS air_temp,
         NULLIF(regexp_replace(wind_speed_raw ,'[^0-9.]','','g'), '')::NUMERIC AS wind_speed,
         NULLIF(regexp_replace(wave_height_raw,'[^0-9.]','','g'), '')::NUMERIC AS wave_height,
         NULLIF(regexp_replace(water_temp_raw ,'[^0-9.]','','g'), '')::NUMERIC AS water_temp,
         weather_txt
-FROM raw.weather;
+FROM raw.weather
+ORDER  BY race_key, obs_time_label;   -- 最新時点を残す
 
 /* ---------- ⑤ FEAT マテビュー ---------- */
 /* 縦持ちフラット (デバッグ用) */
 CREATE MATERIALIZED VIEW IF NOT EXISTS feat.boat_flat AS
-SELECT b.race_key,
+SELECT DISTINCT ON (b.race_key, b.lane)
+       b.race_key,
        b.lane,
        b.racer_id,
        w.air_temp, w.wind_speed, w.wave_height, w.water_temp, w.weather_txt,
@@ -166,13 +173,24 @@ FROM   core.boat_info  b
 JOIN   core.weather    w USING (race_key)
 JOIN   core.start_exh  s USING (race_key, lane)
 JOIN   core.results    r USING (race_key, lane)
-JOIN   core.races      USING (race_key);
+JOIN   core.races      USING (race_key)
+ORDER  BY b.race_key, b.lane;
+
 
 /* 横持ち最終ビュー (CPL-Net 直食い) */
 CREATE MATERIALIZED VIEW IF NOT EXISTS feat.train_features AS
-WITH flat AS (SELECT * FROM feat.boat_flat)
+/* ---- 1) lane 行を持つ boat_flat と races を JOIN して CTE = flat ---- */
+WITH flat AS (
+    SELECT bf.*,
+           r.stadium AS venue     -- stadium を venue として取り込む
+    FROM   feat.boat_flat AS bf
+    JOIN   core.races     AS r  USING (race_key)
+)
+
+/* ---- 2) race_key ごとに横持ち集約 ---- */
 SELECT
-    MAX(race_date)      AS race_date,
+    MAX(race_date) AS race_date,           -- ❷ 別名不要、flat に一列だけ残る
+    MAX(venue)     AS venue,
     race_key,
 
     /* --- レース共通コンテキスト (単一値なので MAX) --- */
@@ -230,6 +248,7 @@ SELECT
 
 FROM flat
 GROUP BY race_key;
+
 /* ---------- ⑥ 一意インデックス (CONCURRENTLY 用) ---------- */
 CREATE UNIQUE INDEX IF NOT EXISTS idx_core_races_pk  ON core.races        (race_key);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_core_results_pk ON core.results     (race_key, lane);

@@ -74,7 +74,7 @@ def parse_results_table(soup: BeautifulSoup) -> list[dict[str, str]]:
         entry, st_time, tactic = st_map.get(lane, ("", "", ""))
         rows.append(
             {
-                "position": position,
+                "position_txt": position,
                 "lane": lane,
                 "racer_no": racer_no,
                 "racer_name": racer_name,

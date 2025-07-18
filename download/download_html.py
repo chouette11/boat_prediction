@@ -79,7 +79,7 @@ def fetch_results2(target_ymd: str, kind: str = "result", no: int = 1):
 if __name__ == "__main__":
     dirs = [
         "download/wakamatsu_off_raceresult_csv",
-        # "download/wakamatsu_off_beforeinfo_csv"
+        # "download/wakamatsu_off_odds3t_csv",
     ]
     for d in dirs:
         files = os.listdir(d)

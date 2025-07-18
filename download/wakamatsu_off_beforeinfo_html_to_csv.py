@@ -120,10 +120,11 @@ def parse_boat_race_html(html_path: str, encoding: str = "utf-8") -> None:
     # 4) スタート展示（ST）
     # ------------------------------------------------------------------
     st_data = []
-    for div in soup.select(".table1_boatImage1"):
+    for i, div in enumerate(soup.select(".table1_boatImage1")):
         lane = div.select_one(".table1_boatImage1Number").get_text(strip=True)
+        entry = i + 1  # 進入
         st   = div.select_one(".table1_boatImage1Time").get_text(strip=True)
-        st_data.append({"lane": lane, "ST": st, "source_file": html_path})
+        st_data.append({"lane": lane, "ST": st, "entry": entry})
 
     if not st_data:
         csv_dir = "download/wakamatsu_off_beforeinfo_csv"
@@ -140,6 +141,7 @@ def parse_boat_race_html(html_path: str, encoding: str = "utf-8") -> None:
 
     start_ex_df = pd.DataFrame(st_data).sort_values("lane")
 
+    racers_df = racers_df.merge(start_ex_df, on="lane", how="left")
     # ------------------------------------------------------------------
     # 5) 水面気象
     # ------------------------------------------------------------------
@@ -164,8 +166,7 @@ def parse_boat_race_html(html_path: str, encoding: str = "utf-8") -> None:
     Path(csv_dir).mkdir(exist_ok=True)
     meta_df.to_csv(f"{csv_dir}/{basename}_meta.csv", index=False, encoding=encoding)
     # closing_df.to_csv(f"{csv_dir}/{basename}_closing_times.csv", index=False, encoding=encoding)
-    racers_df.to_csv(f"{csv_dir}/{basename}_racers.csv", index=False, encoding=encoding)
-    start_ex_df.to_csv(f"{csv_dir}/{basename}_start_exhibition.csv", index=False, encoding=encoding)
+    racers_df.to_csv(f"{csv_dir}/{basename}_beforeinfo.csv", index=False, encoding=encoding)
     weather_df.to_csv(f"{csv_dir}/{basename}_weather.csv", index=False, encoding=encoding)
 
     print("✅ 生成完了: meta.csv, closing_times.csv, racers.csv, start_exhibition.csv, weather.csv")

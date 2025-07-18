@@ -1,160 +1,209 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
+"""load_wakamatsu_csv_staging.py
+
+CSV → raw.*_staging へロードするスクリプト。
+
+- *_results.csv*      → raw.results_staging  (12 列)
+- *_beforeinfo.csv*   → raw.beforeinfo_staging
+- *_weather.csv*      → raw.weather_staging
+
+本番テーブル (raw.results / raw.racers / raw.weather) へは流しません。
+その後の変換は 03_merge_staging.sql などで実施してください。
+
+環境変数 (任意)
+----------------
+PGHOST / PGPORT / PGDATABASE / PGUSER / PGPASSWORD
+    libpq 標準。未指定は localhost:5432/ver2_2/keiichiro
+
+CSV_DIR_RESULTS / CSV_DIR_BEFOREINFO
+    CSV が置いてあるディレクトリ。
+    既定:
+      - download/wakamatsu_off_raceresult_csv
+      - download/wakamatsu_off_beforeinfo_csv
+
 """
-ETL driver for BoatRace data.
- 1. Execute ddl.sql (idempotent)
- 2. COPY new CSV files in ./data into raw.* tables
- 3. REFRESH materialized views
-"""
 
-import os, glob, pathlib, psycopg2, dotenv
+from __future__ import annotations
 
-# ---------- load DB config ----------
-dotenv.load_dotenv("sql/.env")
+import os
+import sys
+from pathlib import Path
 
-# 環境変数をしゅとく
-# (デフォルト値を設定)
+import pandas as pd
+from sqlalchemy import create_engine
 
-password = os.getenv("PGPASSWORD", "")
-post = os.getenv("PGPORT")
-print(f"PGPASSWORD: {password}, PGPORT: {post}")
+# ---------------------------------------------------------------------------
+# 1. *_results.csv → raw.results_staging
+# ---------------------------------------------------------------------------
 
-DB_CONF = {
-    "host":     os.getenv("PGHOST", "localhost"),
-    "port":     int(os.getenv("PGPORT", 5432)),
-    "dbname":   os.getenv("PGDATABASE", "boatrace"),
-    "user":     os.getenv("PGUSER", "br_user"),
-    "password": os.getenv("PGPASSWORD", "secret"),
+import re
+
+def _extract_date_no_from_path(path: Path) -> tuple[str | None, int | None]:
+    """wakamatsu_raceresult_20_20240101_10_results.csv → ('20240101', 10)"""
+    m = re.search(r"_(\d{8})_(\d+)_", path.name)
+    if m:
+        yyyymmdd, race_no = m.groups()
+        return yyyymmdd, int(race_no)
+    return None, None
+
+def _load_results(engine, path: str) -> None:
+    p = Path(path)
+    df = pd.read_csv(p)
+
+    # CSV 列名 → staging 列名へ補正
+    df = df.rename(
+        columns={
+            "time": "arrival_time",
+            "st_time": "st_time_raw",
+        }
+    )
+
+    required_cols = [
+        "position_txt",
+        "lane",
+        "racer_no",
+        "racer_name",
+        "arrival_time",
+        "st_entry",
+        "st_time_raw",
+        "tactic",
+        "stadium",
+        "race_title",
+        "date_label",
+        "race_no",
+        "source_file",
+    ]
+    for col in required_cols:
+        if col not in df.columns:
+            df[col] = pd.NA
+
+    # ファイル名から race_date / race_no を補完
+    yyyymmdd, race_no_from_fn = _extract_date_no_from_path(p)
+    if yyyymmdd:
+        # date_label が空なら補完 (分析用に保持するだけ。staging では NOT NULL 制約なし)
+        df.loc[df["date_label"].isna(), "date_label"] = yyyymmdd
+    if race_no_from_fn is not None:
+        df.loc[df["race_no"].isna(), "race_no"] = race_no_from_fn
+
+    # 数値列を明示的に変換
+    num_cols = ["lane", "racer_no", "st_entry", "st_time_raw", "race_no"]
+    df[num_cols] = df[num_cols].apply(pd.to_numeric, errors="coerce")
+
+    # source_file が入っていなければファイル名をそのままセット
+    if df["source_file"].isna().all():
+        df["source_file"] = str(p)
+
+    df.to_sql(
+        "results_staging",
+        con=engine,
+        schema="raw",
+        if_exists="append",
+        index=False,
+        method="multi",
+    )
+# ---------------------------------------------------------------------------
+# 2. *_beforeinfo.csv → raw.beforeinfo_staging
+# ---------------------------------------------------------------------------
+
+def _load_beforeinfo(engine, path: str) -> None:
+    df = pd.read_csv(path)
+
+    df = df.rename(columns={"ST": "st_raw", "entry": "st_entry"})
+
+    required_cols = [
+        "lane",
+        "racer_id",
+        "name",
+        "weight",
+        "adjust_weight",
+        "exhibition_time",
+        "tilt",
+        "photo",
+        "source_file",
+        "st_raw",
+        "st_entry",
+    ]
+    for col in required_cols:
+        if col not in df.columns:
+            df[col] = pd.NA
+
+    numeric_cols = ["adjust_weight", "exhibition_time", "tilt", "st_entry"]
+    df[numeric_cols] = df[numeric_cols].apply(pd.to_numeric, errors="coerce")
+
+    df.to_sql(
+        "beforeinfo_staging",
+        con=engine,
+        schema="raw",
+        if_exists="append",
+        index=False,
+        method="multi",
+    )
+
+# ---------------------------------------------------------------------------
+# 3. *_weather.csv → raw.weather_staging
+# ---------------------------------------------------------------------------
+
+def _load_weather(engine, path: str) -> None:
+    df = pd.read_csv(path)
+
+    # カラム名を小文字に統一 (CSV 側の大文字小文字ゆらぎ対策)
+    df.columns = [c.lower() for c in df.columns]
+
+    df.to_sql(
+        "weather_staging",
+        con=engine,
+        schema="raw",
+        if_exists="append",
+        index=False,
+        method="multi",
+    )
+
+# ---------------------------------------------------------------------------
+# 4. ローダ設定
+# ---------------------------------------------------------------------------
+
+_LOADERS = {
+    "results": ("*_results.csv", _load_results),
+    "beforeinfo": ("*_beforeinfo.csv", _load_beforeinfo),
+    "weather": ("*_weather.csv", _load_weather),
 }
 
-# ---------- connect ----------
-conn = psycopg2.connect(**DB_CONF)
-conn.autocommit = True
-cur = conn.cursor()
+# ---------------------------------------------------------------------------
+# 5. main
+# ---------------------------------------------------------------------------
 
-# ---------- 1. DDL ----------
-ddl_sql = pathlib.Path("sql/ddl.sql").read_text(encoding="utf8")
-cur.execute(ddl_sql)
-print("✔ DDL executed")
+def main() -> None:
+    
+    csv_root = {
+        "results": Path(os.getenv("CSV_DIR_RESULTS", "download/wakamatsu_off_raceresult_csv")),
+        "beforeinfo": Path(os.getenv("CSV_DIR_BEFOREINFO", "download/wakamatsu_off_beforeinfo_csv")),
+        "weather": Path(os.getenv("CSV_DIR_BEFOREINFO", "download/wakamatsu_off_beforeinfo_csv")),
+    }
 
-# ---------- 2. CSV COPY ----------
-def copy_csv(table, pattern):
-    files = glob.glob(pattern)
-    if not files:
-        print(f"  (no files for {pattern})")
-        return
-    for fp in files:
-        print(f"processing {fp}...")
-        try:
-            with open(fp, "r", encoding="utf8") as f:
-                cur.copy_expert(
-                    f"COPY {table} FROM STDIN WITH (FORMAT csv, HEADER 1, ENCODING 'UTF8')",
-                    f,
-                )
-            print(f"  → {table}: {fp}")
-        except Exception as e:
-            print(f"❌ COPY FAILED for {fp}: {e}")
+    user = os.getenv("PGUSER", "keiichiro")
+    host = os.getenv("PGHOST", "localhost")
+    port = os.getenv("PGPORT", "5432")
+    database = os.getenv("PGDATABASE", "ver1_0")
 
-print("🔄 Copying CSV files...")
-copy_csv(
-    "raw.results_staging",
-    "download/wakamatsu_off_result_csv/wakamatsu_result_*.csv",
-)
-cur.execute("""
-INSERT INTO raw.results (stadium, race_date, race_no, lane,
-                         position_txt, racer_no, st_time_raw, source_file)
-SELECT
-    stadium,
-    /* 例: '..._20241106_6.html' → 2024-11-06 */
-    TO_DATE( REGEXP_REPLACE(source_file, '.*_(\\d{8})_.*', '\\1'), 'YYYYMMDD') AS race_date,
-    race_no,
-    lane,
-    position,         -- '１','２',…をそのまま
-    racer_no,
-    st_time_raw,
-    source_file
-FROM raw.results_staging
-ON CONFLICT DO NOTHING;          -- ← 重複取込を無視したければ
-TRUNCATE raw.results_staging;     -- 次回の ETL に備えて空に
-""")
-copy_csv(
-    "raw.racers_staging",
-    "download/wakamatsu_off_beforeinfo_csv/*_racers.csv"
-)
-cur.execute("""
-INSERT INTO raw.racers (
-    race_date, race_no, lane, racer_id,
-    weight_raw, adjust_weight, exh_time, tilt_deg
-)
-SELECT
-    TO_DATE((REGEXP_MATCHES(source_file, '.*_(\\d{8})_(\\d+)\\.html$'))[1], 'YYYYMMDD') AS race_date,
-    ((REGEXP_MATCHES(source_file, '.*_(\\d{8})_(\\d+)\\.html$'))[2])::INT AS race_no,
-    lane,
-    racer_id,
-    weight,
-    adjust_weight,
-    exhibition_time,
-    tilt
-FROM raw.racers_staging
-WHERE source_file ~ '.*_(\\d{8})_(\\d+)\\.html$'
-ON CONFLICT DO NOTHING;
+    dsn = f"postgresql://{user}@{host}:{port}/{database}"
+    engine = create_engine(dsn)
 
-TRUNCATE raw.racers_staging;
-""")
-copy_csv("raw.start_exhibition_staging",
-         "download/wakamatsu_off_beforeinfo_csv/wakamatsu_beforeinfo_*_start_exhibition.csv")
-cur.execute("""
-            INSERT INTO raw.start_exhibition (race_date, race_no, lane, st_raw)
-            SELECT
-                TO_DATE(
-                    REGEXP_REPLACE(source_file,
-                       '.*_20_(\\d{8})_\\d+\\.html$', '\\1'),
-                    'YYYYMMDD'
-                ) AS race_date,
-                CAST(
-                    REGEXP_REPLACE(source_file,
-                       '.*_20_\\d{8}_(\\d+)\\.html$', '\\1') AS INT
-                ) AS race_no,
-                lane,
-                st_raw
-            FROM   raw.start_exhibition_staging
-            ON CONFLICT DO NOTHING;
-            TRUNCATE raw.start_exhibition_staging;
-        """)
-copy_csv("raw.weather_staging",          "download/wakamatsu_off_beforeinfo_csv/wakamatsu_beforeinfo_*_weather.csv")
-cur.execute("""
-            INSERT INTO raw.weather (
-                race_date, race_no,
-                obs_time_label, weather_txt,
-                air_temp_raw, wind_speed_raw,
-                water_temp_raw, wave_height_raw
-            )
-            SELECT
-                /* source_file から 8 桁日付とレース番号を抽出 */
-                TO_DATE(regexp_replace(source_file,
-                       '.*_20_(\\d{8})_\\d+\\.html$','\\1'),'YYYYMMDD'),
-                regexp_replace(source_file,
-                       '.*_20_\\d{8}_(\\d+)\\.html$','\\1')::int,
-                obs_datetime_label,
-                weather,
-                air_temp_C,
-                wind_speed_m,
-                water_temp_C,
-                wave_height_cm
-            FROM raw.weather_staging
-            ON CONFLICT DO NOTHING;
-            TRUNCATE raw.weather_staging;
-        """)
+    for kind, (pattern, loader) in _LOADERS.items():
+        path = csv_root[kind]
+        if not path.is_dir():
+            print(f"❌ {path} not found", file=sys.stderr)
+            continue
 
-print("✔ CSV files copied into raw tables")
-# ---------- 3. REFRESH materialized views ----------
-views = [
-    "core.races", "core.results", "core.boat_info",
-    "core.start_exh", "core.weather",
-    "feat.boat_flat", "feat.train_features"
-]
-for v in views:
-    cur.execute(f"REFRESH MATERIALIZED VIEW {v};")
-    print(f"✔ refreshed {v}")
+        files = sorted(path.glob(pattern))
+        print(f"{kind}: {len(files)} files in {path}")
+        for f in files:
+            print(f"  loading {f.name}")
+            loader(engine, str(f))
 
-cur.close(); conn.close()
-print("🎉 ETL done")
+    print("✔ Staging import complete.")
+
+
+if __name__ == "__main__":
+    from dotenv import load_dotenv
+    load_dotenv(override=True)
+    main()

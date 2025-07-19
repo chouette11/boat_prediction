@@ -3,3 +3,6 @@
 .env
 diff.patch
 .DS_Store
+*.pkl
+*.pt
+events.out.*

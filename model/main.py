@@ -1,10 +1,76 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[220]:
+# In[ ]:
 
 
-import torch, tqdm
+
+
+
+# In[ ]:
+
+
+
+
+
+
+
+# In[ ]:
+
+
+
+
+
+
+
+
+
+# In[ ]:
+
+
+
+
+
+
+
+
+
+
+
+# In[ ]:
+
+
+
+
+
+
+
+
+
+
+
+
+
+# In[ ]:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# In[365]:
+
+
+import torch
 import pandas as pd, psycopg2, os
 from sklearn.preprocessing import StandardScaler
 import numpy as np  
@@ -14,9 +80,25 @@ import joblib
 import torch.nn as nn
 import datetime as dt
 from dotenv import load_dotenv
+import matplotlib.pyplot as plt
+# --- TensorBoard ---
+from torch.utils.tensorboard import SummaryWriter
+import time
+
+# --- reproducibility helpers ---
+import random  # reproducibility helpers
+
+SEED = 42
+random.seed(SEED)
+np.random.seed(SEED)
+torch.manual_seed(SEED)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(SEED)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 
 
-# In[221]:
+# In[366]:
 
 
 load_dotenv(override=True)
@@ -41,7 +123,7 @@ df = pd.read_sql("""
 print(f"Loaded {len(df)} rows from the database.")
 
 
-# In[222]:
+# In[367]:
 
 
 # 風向をラジアンに変換し、sin/cos 特徴量を生成
@@ -76,7 +158,7 @@ scaler_filename = "artifacts/wind_scaler.pkl"
 joblib.dump(scaler, scaler_filename)
 
 
-# In[223]:
+# In[368]:
 
 
 def encode(col):
@@ -88,7 +170,7 @@ venue2id = encode("venue")
 # race_type2id = encode("race_type")
 
 
-# In[224]:
+# In[369]:
 
 
 class BoatRaceDataset(Dataset):
@@ -204,7 +286,7 @@ class BoatRaceDataset(Dataset):
         )
 
 
-# In[225]:
+# In[370]:
 
 
 # ============================================================
@@ -243,7 +325,11 @@ class SimpleCPLNet(nn.Module):
         self.lane_emb = nn.Embedding(6, lane_dim)
         self.ctx_fc   = nn.Linear(ctx_in, hidden)
         self.boat_fc  = nn.Linear(boat_in + lane_dim, hidden)
-        self.head     = nn.Linear(hidden, 1)
+        self.head = nn.Sequential(
+            nn.Linear(hidden, hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, 1)
+        )
 
         # 重み初期化を対称性ブレイク用に Xavier で揃える
         for m in self.modules():
@@ -272,7 +358,7 @@ class SimpleCPLNet(nn.Module):
         return score.squeeze(-1)           # (B,6)
 
 
-# In[226]:
+# In[371]:
 
 
 def pl_nll(scores: torch.Tensor, ranks: torch.Tensor) -> torch.Tensor:
@@ -302,11 +388,63 @@ ranks  = torch.tensor([[1, 2, 3, 4, 5, 6]], dtype=torch.int64)    # lane0 が 1 
 print("pl_nll should be ~0 :", pl_nll(scores, ranks).item())
 
 
-# In[227]:
+# In[372]:
+
+
+def run_experiment(data_frac, df_full, mode="zscore", epochs=5, device="cpu"):
+    df_frac = df_full.sample(frac=data_frac, random_state=42)
+    df_frac["race_date"] = pd.to_datetime(df_frac["race_date"]).dt.date
+    latest_date = df_frac["race_date"].max()
+    cutoff = latest_date - dt.timedelta(days=90)  # last 3 months used as validation set
+    ds_train = BoatRaceDataset(df_frac[df_frac["race_date"] < cutoff], mode=mode)
+    ds_val = BoatRaceDataset(df_frac[df_frac["race_date"] >= cutoff], mode=mode)
+
+    loader_train = DataLoader(ds_train, batch_size=256, shuffle=True)
+    loader_val = DataLoader(ds_val, batch_size=512)
+
+    model = SimpleCPLNet().to(device)
+    opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-4)
+
+    for epoch in range(epochs):
+        model.train()
+        for ctx, boats, lane_ids, ranks in loader_train:
+            ctx, boats = ctx.to(device), boats.to(device)
+            lane_ids, ranks = lane_ids.to(device), ranks.to(device)
+            loss = pl_nll(model(ctx, boats, lane_ids), ranks)
+            opt.zero_grad(); loss.backward(); opt.step()
+
+    train_loss = evaluate_model(model, ds_train, device)
+    val_loss = evaluate_model(model, ds_val, device)
+    return train_loss, val_loss
+
+
+# In[373]:
+
+
+# 学習曲線の描画
+def plot_learning_curve(df, device):
+    data_fracs = [0.01, 0.05, 0.1, 0.2, 0.5, 1.0]
+    results = []
+
+    for frac in data_fracs:
+        tr_loss, val_loss = run_experiment(frac, df, device=device)
+        print(f"Data frac {frac:.2f} → Train: {tr_loss:.4f} / Val: {val_loss:.4f}")
+        results.append((frac, tr_loss, val_loss))
+
+    fracs, tr_losses, val_losses = zip(*results)
+    plt.plot(fracs, tr_losses, label="Train Loss")
+    plt.plot(fracs, val_losses, label="Val Loss")
+    plt.xlabel("Training Data Fraction")
+    plt.ylabel("Loss")
+    plt.title("Learning Curve")
+    plt.legend()
+    plt.grid(True)
+    plt.show()
 
 
 df["race_date"] = pd.to_datetime(df["race_date"]).dt.date
-cutoff = dt.date(2024, 11, 1)
+latest_date = df["race_date"].max()
+cutoff = latest_date - dt.timedelta(days=90)
 
 mode = "zscore"  # "raw", "log", "zscore" も試せる
 ds_train = BoatRaceDataset(df[df["race_date"] <  cutoff], mode=mode)
@@ -323,6 +461,10 @@ model  = SimpleCPLNet().to(device)
 opt    = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-4)
 
 EPOCHS = 20
+# --- TensorBoard setup ---
+log_dir = os.path.join("artifacts", "tb", time.strftime("%Y%m%d-%H%M%S"))
+os.makedirs(log_dir, exist_ok=True)
+writer = SummaryWriter(log_dir=log_dir)
 for epoch in range(EPOCHS):
 
     if epoch == 0:                  # 1 エポック目だけ試す例
@@ -340,7 +482,11 @@ for epoch in range(EPOCHS):
         ctx, boats = ctx.to(device), boats.to(device)
         lane_ids, ranks = lane_ids.to(device), ranks.to(device)
 
-        loss = pl_nll(model(ctx, boats, lane_ids), ranks)
+        scores = model(ctx, boats, lane_ids)
+        pl_loss = pl_nll(scores, ranks)
+        pred_rank = scores.argsort(dim=1, descending=True).argsort(dim=1) + 1  # 1〜6 着になるよう変換
+        l1_loss = nn.L1Loss()(pred_rank.float(), ranks.float())
+        loss = pl_loss + 0.3 * l1_loss  # alpha=0.3 は調整可能
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)  # ★勾配爆発対策★
         opt.step()
@@ -355,7 +501,11 @@ for epoch in range(EPOCHS):
         for ctx, boats, lane_ids, ranks in loader_val:
             ctx, boats = ctx.to(device), boats.to(device)
             lane_ids, ranks = lane_ids.to(device), ranks.to(device)
-            val_sum += pl_nll(model(ctx, boats, lane_ids), ranks).item() * len(ctx)
+            scores = model(ctx, boats, lane_ids)
+            pl_loss = pl_nll(scores, ranks)
+            pred_rank = scores.argsort(dim=1, descending=True).argsort(dim=1) + 1
+            l1_loss = nn.L1Loss()(pred_rank.float(), ranks.float())
+            val_sum += (pl_loss + 0.3 * l1_loss).item() * len(ctx)
 
     val_nll = val_sum / len(loader_val.dataset)
 
@@ -391,6 +541,10 @@ for epoch in range(EPOCHS):
 
     acc_top1 = top1_accuracy(all_scores, all_ranks)
     acc_tri3 = trifecta_hit_rate(all_scores, all_ranks)
+    writer.add_scalar("loss/train_nll",  tr_nll,  epoch)
+    writer.add_scalar("loss/val_nll",    val_nll, epoch)
+    writer.add_scalar("acc/top1",        acc_top1, epoch)
+    writer.add_scalar("acc/trifecta_hit", acc_tri3, epoch)
 
     # print(f"Top-1 Acc: {acc_top1:.3f}   Trifecta Hit: {acc_tri3:.3f}")
 
@@ -401,10 +555,14 @@ for epoch in range(EPOCHS):
     # 1回目だけヘッダーを書き込む
     write_header = epoch == 0 and not os.path.exists(log_path)
     with open(log_path, mode="a", newline="") as f:
-        writer = csv.writer(f)
+        writer_csv = csv.writer(f)
         if write_header:
-            writer.writerow(["epoch", "train_nll", "val_nll", "top1_acc", "trifecta_hit"])
-        writer.writerow([epoch, tr_nll, val_nll, acc_top1, acc_tri3])
+            writer_csv.writerow(["epoch", "train_nll", "val_nll", "top1_acc", "trifecta_hit"])
+        writer_csv.writerow([epoch, tr_nll, val_nll, acc_top1, acc_tri3])
+
+
+# --- Close TensorBoard writer after training ---
+writer.close()
 
 
 
@@ -529,4 +687,81 @@ if __name__ == "__main__":
 
     with open("main.py", "w", encoding="utf-8") as f:
         f.write(source)
+
+
+# ============================================================
+# ★ 予測用スクリプト（直近3ヶ月データを使って予測） ★
+# ============================================================
+
+def predict_latest_3months():
+    import datetime as dt
+    today = dt.date.today()
+    three_months_ago = today - dt.timedelta(days=90)
+
+    query = f"""
+        SELECT * FROM feat.train_features
+        WHERE race_date BETWEEN '{three_months_ago}' AND '{today}'
+    """
+    df_pred = pd.read_sql(query, conn)
+    print(f"[predict] Loaded {len(df_pred)} rows for prediction")
+
+    # --- 前処理 ---
+    df_pred["wind_dir_rad"] = np.deg2rad(df_pred["wind_dir_deg"])
+    df_pred["wind_sin"] = np.sin(df_pred["wind_dir_rad"])
+    df_pred["wind_cos"] = np.cos(df_pred["wind_dir_rad"])
+    df_pred[NUM_COLS] = scaler.transform(df_pred[NUM_COLS])
+
+    bool_cols = [c for c in df_pred.columns if c.endswith("_fs_flag")]
+    df_pred[bool_cols] = df_pred[bool_cols].fillna(False)
+    rank_cols = [f"lane{l}_rank" for l in range(1, 7)]
+    df_pred[rank_cols] = df_pred[rank_cols].fillna(7).astype("int32")
+
+    pred_ds = BoatRaceDataset(df_pred, mode="zscore")
+    pred_loader = DataLoader(pred_ds, batch_size=1)
+
+    model.eval()
+    for i, (ctx, boats, lane_ids, _) in enumerate(pred_loader):
+        ctx, boats, lane_ids = ctx.to(device), boats.to(device), lane_ids.to(device)
+        with torch.no_grad():
+            scores = model(ctx, boats, lane_ids)  # (1,6)
+            pred_rank = scores.squeeze().argsort(descending=True).argsort() + 1
+            # print(f"[{i:03d}] 予測順位:", pred_rank.cpu().numpy())
+
+    # --- 追加: 固定着順との比較評価 ---
+    def evaluate_against_fixed_ranks(pred_loader):
+        """
+        着順 [1,2,3,4,5,6] を常に予測したと仮定した場合と、モデルの予測を比較する
+        """
+        model_correct = [0] * 6
+        fixed_correct = [0] * 6
+        total = 0
+
+        model.eval()
+        for _, (ctx, boats, lane_ids, true_ranks) in enumerate(pred_loader):
+            ctx, boats, lane_ids = ctx.to(device), boats.to(device), lane_ids.to(device)
+            true_ranks = true_ranks.to(device)
+
+            with torch.no_grad():
+                scores = model(ctx, boats, lane_ids)
+                pred_rank = scores.squeeze().argsort(descending=True).argsort() + 1  # (6,)
+
+            total += 1
+            for i in range(6):
+                # モデルがその艇の着順を当てたか
+                if pred_rank[i].item() == true_ranks[0][i].item():
+                    model_correct[i] += 1
+                # 固定予測 [1,2,3,4,5,6] を使った場合
+                if (i + 1) == true_ranks[0][i].item():
+                    fixed_correct[i] += 1
+
+        print("\n--- モデル vs 固定着順 予測精度 ---")
+        for i in range(6):
+            print(f"{i+1}着: モデル={model_correct[i]/total:.3f}  固定={fixed_correct[i]/total:.3f}  (正解数: モデル={model_correct[i]} 固定={fixed_correct[i]})")
+
+    evaluate_against_fixed_ranks(pred_loader)
+
+# 呼び出し例
+if __name__ == "__main__":
+    plot_learning_curve(df, device)
+    predict_latest_3months()
 

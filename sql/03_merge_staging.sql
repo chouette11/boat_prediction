@@ -79,6 +79,62 @@ FROM bfs
 ON CONFLICT DO NOTHING;
 
 ------------------------------------------------------------
+-- 2b) person_staging → raw.person
+------------------------------------------------------------
+DO $$
+BEGIN
+    ALTER TABLE raw.person
+    ADD CONSTRAINT person_unique UNIQUE (stadium, race_date, race_no, boat_no);
+EXCEPTION
+    WHEN duplicate_object THEN
+        RAISE NOTICE 'Constraint person_unique already exists.';
+END
+$$;
+
+WITH ps AS (
+    SELECT *,
+           (regexp_match(right(source_file, 100),
+                         'wakamatsu_person_[0-9]+_([0-9]{8})_([0-9]+)\.csv$'))[1] AS yyyymmdd,
+           (regexp_match(right(source_file, 100),
+                         'wakamatsu_person_[0-9]+_([0-9]{8})_([0-9]+)\.csv$'))[2] AS race_no_ex
+    FROM raw.person_staging
+    WHERE right(source_file, 100) ~ 'wakamatsu_person_[0-9]+_[0-9]{8}_[0-9]+\.csv$'
+)
+INSERT INTO raw.person (
+    stadium, race_date, race_no,
+    boat_no, reg_no, name, age,
+    class_now, class_hist1, class_hist2, class_hist3,
+    ability_now, ability_prev,
+    "F_now", "L_now",
+    winrate_natl, "2in_natl", "3in_natl",
+    nat_1st, nat_2nd, nat_3rd, nat_starts,
+    loc_1st, loc_2nd, loc_3rd, loc_starts,
+    motor_no, motor_2in, motor_3in,
+    mot_1st, mot_2nd, mot_3rd, mot_starts,
+    boat_no_hw, boat_2in, boat_3in,
+    boa_1st, boa_2nd, boa_3rd, boa_starts,
+    source_file
+)
+SELECT
+    '若松',
+    to_date(yyyymmdd, 'YYYYMMDD'),
+    race_no_ex::int,
+    boat_no, reg_no, name, age,
+    class_now, class_hist1, class_hist2, class_hist3,
+    ability_now, ability_prev,
+    "F_now", "L_now",
+    winrate_natl, "2in_natl", "3in_natl",
+    nat_1st, nat_2nd, nat_3rd, nat_starts,
+    loc_1st, loc_2nd, loc_3rd, loc_starts,
+    motor_no, motor_2in, motor_3in,
+    mot_1st, mot_2nd, mot_3rd, mot_starts,
+    boat_no_hw, boat_2in, boat_3in,
+    boa_1st, boa_2nd, boa_3rd, boa_starts,
+    source_file
+FROM ps
+ON CONFLICT DO NOTHING;
+
+------------------------------------------------------------
 -- 3) weather_staging → raw.weather
 ------------------------------------------------------------
 DO $$

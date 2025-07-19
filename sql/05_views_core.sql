@@ -25,26 +25,67 @@ SELECT DISTINCT ON (race_key, lane)
 FROM raw.results
 ORDER BY race_key, lane, source_file DESC;
 
--- 出走前情報 ------------------------------------------------
 CREATE OR REPLACE VIEW core.boat_info AS
-SELECT DISTINCT ON (race_key, lane)
-       core.f_race_key(race_date, race_no, stadium) AS race_key,
-       lane,
-       racer_id,
-       CAST(regexp_replace(weight_raw, '[^0-9.]', '', 'g') AS NUMERIC(5,1)) AS weight,
-       exh_time,
-       tilt_deg,
-       (substr(st_raw, 1, 1) = 'F') AS fs_flag,
+SELECT DISTINCT ON (r.race_key, r.lane)
+       r.race_key,
+       r.lane,
+       r.racer_id,
+       CAST(regexp_replace(r.weight_raw, '[^0-9.]', '', 'g') AS NUMERIC(5,1)) AS weight,
+       r.exh_time,
+       r.tilt_deg,
+       (substr(r.st_raw, 1, 1) = 'F') AS fs_flag,
        CASE
-           WHEN regexp_replace(st_raw, '^F', '') ~ '^\.\d{2}$' THEN
-               CAST('0' || regexp_replace(st_raw, '^F', '') AS NUMERIC(4,2))
-           WHEN regexp_replace(st_raw, '^F', '') ~ '^\d{1}\.\d{1,2}$' THEN
-               CAST(regexp_replace(st_raw, '^F', '') AS NUMERIC(4,2))
+           WHEN regexp_replace(r.st_raw, '^F', '') ~ '^\.\d{2}$' THEN
+               CAST('0' || regexp_replace(r.st_raw, '^F', '') AS NUMERIC(4,2))
+           WHEN regexp_replace(r.st_raw, '^F', '') ~ '^\d{1}\.\d{1,2}$' THEN
+               CAST(regexp_replace(r.st_raw, '^F', '') AS NUMERIC(4,2))
            ELSE
                NULL
-       END AS st_time
-FROM raw.racers
-ORDER BY race_key, lane, st_entry;
+       END AS st_time,
+       p.class_now,
+       p.ability_now,
+       p.winrate_natl,
+       p."2in_natl",
+       p."3in_natl",
+       p.age,
+       p.class_hist1,
+       p.class_hist2,
+       p.class_hist3,
+       p.ability_prev,
+       p."F_now",
+       p."L_now",
+       p.nat_1st,
+       p.nat_2nd,
+       p.nat_3rd,
+       p.nat_starts,
+       p.loc_1st,
+       p.loc_2nd,
+       p.loc_3rd,
+       p.loc_starts,
+       p.motor_no,
+       p.motor_2in,
+       p.motor_3in,
+       p.mot_1st,
+       p.mot_2nd,
+       p.mot_3rd,
+       p.mot_starts,
+       p.boat_no_hw,
+       p.boat_2in,
+       p.boat_3in,
+       p.boa_1st,
+       p.boa_2nd,
+       p.boa_3rd,
+       p.boa_starts
+FROM (
+    SELECT *,
+           core.f_race_key(race_date, race_no, stadium) AS race_key
+    FROM raw.racers
+) r
+LEFT JOIN raw.person p
+  ON p.reg_no = r.racer_id
+ AND core.f_race_key(p.race_date, p.race_no, p.stadium) = r.race_key
+ AND p.boat_no = r.lane
+ORDER BY r.race_key, r.lane, r.st_entry;
 
 -- 天候 ------------------------------------------------------
 CREATE MATERIALIZED VIEW core.weather AS

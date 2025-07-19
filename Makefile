@@ -1,4 +1,4 @@
-DB_NAME      := ver1_2
+DB_NAME      := ver1_6
 DB_USER      := keiichiro
 DB_HOST      := localhost
 
@@ -28,6 +28,10 @@ db_init:
 db_merge:
 	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql/03_merge_staging.sql
 
+.PHONY: db_5
+db_5:
+	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql/05_views_core.sql
+
 .PHONY: initdb
 initdb:
 	# ① データベースを削除
@@ -51,3 +55,12 @@ initdb:
 db_list:
 	psql -h $(DB_HOST) -U $(DB_USER) -d postgres -c "\list"
 
+.PHONY: to_ipynb
+to_ipynb:
+	# Jupyter Notebookに変換
+	jupytext model/main.py --to notebook
+
+.PHONY: tensorboard
+tensorboard:
+	# TensorBoardを起動
+	tensorboard --logdir model/artifacts/tb --port 6006

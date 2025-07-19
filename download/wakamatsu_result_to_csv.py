@@ -25,7 +25,7 @@ def parse_html(html: str) -> List[Dict]:
     """HTML 文字列を解析してレコードの list[dict] を返す"""
     soup = BeautifulSoup(html, "html.parser")
     tables = soup.select("div.tblRL > table")
-    for table in tables:
+    for i, table in enumerate(tables):
         if table is None:
             raise ValueError("出走表テーブル (div.tblRL) が見つかりません")
 
@@ -56,6 +56,8 @@ def parse_html(html: str) -> List[Dict]:
 
             # 基本情報 --------------------------
             reg_no = _num(cells[2].get_text(), int)  # 登録番号
+            if reg_no is None:
+                continue
             name_age_txt = cells[3].get_text(" ", strip=True)
             name_match = re.match(r"(.+?)\s*\((\d+)\)", name_age_txt)
             name = name_match.group(1).strip() if name_match else name_age_txt
@@ -143,15 +145,22 @@ def parse_html(html: str) -> List[Dict]:
                     "boa_2nd": boa_2,
                     "boa_3rd": boa_3,
                     "boa_starts": boa_st,
+                    "source_file": f"download/wakamatsu_person_html/{html_file}",
                 }
             )
-        return result
+
+            out_path = Path(f"download/wakamatsu_person_csv/{html_file.replace('.html', f'_{i+1}.csv')}")
+            with out_path.open("w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=result[0].keys())
+                writer.writeheader()
+                writer.writerows(result)
 
 
 def save_csv(records: List[Dict], out_path: Path) -> None:
     """レコードリストを CSV ファイルへ書き出し"""
     if not records:
         return
+    print(f"records: {records}")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=records[0].keys())
@@ -160,18 +169,10 @@ def save_csv(records: List[Dict], out_path: Path) -> None:
 
 
 if __name__ == "__main__":
-    import argparse, sys
-
-    parser = argparse.ArgumentParser(
-        description="競艇 HTML 出走表を CSV に変換", prog="parse_boatrace_html"
-    )
-    parser.add_argument("html_file", help="入力 HTML ファイル")
-    parser.add_argument(
-        "-o", "--output", default="boatrace_output.csv", help="出力 CSV パス"
-    )
-    args = parser.parse_args()
-
-    html_text = Path(args.html_file).read_text(encoding="utf-8", errors="ignore")
-    recs = parse_html(html_text)
-    save_csv(recs, Path(args.output))
-    print(f"{len(recs)} records written to {args.output}", file=sys.stderr)
+    import os
+    htmls = os.listdir("download/wakamatsu_person_html")
+    for html_file in htmls:
+        html_text = Path(f"download/wakamatsu_person_html/{html_file}").read_text(encoding="utf-8", errors="ignore")
+        parse_html(html_text)
+        
+    print("All done.")

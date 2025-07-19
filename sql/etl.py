@@ -40,7 +40,7 @@ import re
 
 def _extract_date_no_from_path(path: Path) -> tuple[str | None, int | None]:
     """wakamatsu_raceresult_20_20240101_10_results.csv → ('20240101', 10)"""
-    m = re.search(r"_(\d{8})_(\d+)_", path.name)
+    m = re.search(r"_(\d{8})_(\d+)", path.name)
     if m:
         yyyymmdd, race_no = m.groups()
         return yyyymmdd, int(race_no)
@@ -159,10 +159,51 @@ def _load_weather(engine, path: str) -> None:
     )
 
 # ---------------------------------------------------------------------------
+# 3.5 *_person.csv → raw.person_staging
+# ---------------------------------------------------------------------------
+
+def _load_person(engine, path: str) -> None:
+    df = pd.read_csv(path)
+
+    float_cols = [
+        "winrate_natl", "2in_natl", "3in_natl",
+        "motor_2in", "motor_3in",
+        "boat_2in", "boat_3in"
+    ]
+    int_cols = [
+        "boat_no", "reg_no", "age", "ability_now", "ability_prev",
+        "F_now", "L_now", "nat_1st", "nat_2nd", "nat_3rd", "nat_starts",
+        "loc_1st", "loc_2nd", "loc_3rd", "loc_starts",
+        "motor_no", "mot_1st", "mot_2nd", "mot_3rd", "mot_starts",
+        "boat_no_hw", "boa_1st", "boa_2nd", "boa_3rd", "boa_starts"
+    ]
+
+    df[float_cols] = df[float_cols].replace("", pd.NA).astype("float64")
+    df[int_cols] = df[int_cols].replace("", pd.NA).astype("Int64")
+
+    p = Path(path)
+    df["source_file"] = str(p)
+
+    yyyymmdd, race_no = _extract_date_no_from_path(p)
+    df["race_no"] = race_no
+    print(race_no)
+
+    df.to_sql(
+        "person_staging",
+        con=engine,
+        schema="raw",
+        if_exists="append",
+        index=False,
+        method="multi",
+    )
+
+# ---------------------------------------------------------------------------
 # 4. ローダ設定
 # ---------------------------------------------------------------------------
 
 _LOADERS = {
+        "person": ("*_person_*.csv", _load_person),
+
     "results": ("*_results.csv", _load_results),
     "beforeinfo": ("*_beforeinfo.csv", _load_beforeinfo),
     "weather": ("*_weather.csv", _load_weather),
@@ -178,6 +219,7 @@ def main() -> None:
         "results": Path(os.getenv("CSV_DIR_RESULTS", "download/wakamatsu_off_raceresult_csv")),
         "beforeinfo": Path(os.getenv("CSV_DIR_BEFOREINFO", "download/wakamatsu_off_beforeinfo_csv")),
         "weather": Path(os.getenv("CSV_DIR_BEFOREINFO", "download/wakamatsu_off_beforeinfo_csv")),
+        "person": Path(os.getenv("CSV_DIR_PERSON", "download/wakamatsu_person_csv")),
     }
 
     user = os.getenv("PGUSER", "keiichiro")

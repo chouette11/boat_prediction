@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS raw.weather (
     weather_txt        TEXT,
     air_temp_raw       TEXT,
     wind_speed_raw     TEXT,
+    wind_dir_raw       TEXT,
     water_temp_raw     TEXT,
     wave_height_raw    TEXT
 );

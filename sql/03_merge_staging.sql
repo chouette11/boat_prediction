@@ -107,6 +107,7 @@ INSERT INTO raw.weather (
     stadium, race_date, race_no,
     obs_time_label, weather_txt,
     air_temp_raw, wind_speed_raw,
+    wind_dir_raw,
     water_temp_raw, wave_height_raw
 )
 SELECT
@@ -115,6 +116,7 @@ SELECT
     race_no_ex::int,
     obs_datetime_label, weather,
     air_temp_c, wind_speed_m,
+    wind_dir_icon,
     water_temp_c, wave_height_cm
 FROM ws
 ON CONFLICT DO NOTHING;

@@ -52,6 +52,25 @@ SELECT DISTINCT ON (race_key)
        core.f_race_key(race_date, race_no, stadium) AS race_key,
        NULLIF(regexp_replace(air_temp_raw   ,'[^0-9.]','','g'), '')::NUMERIC AS air_temp,
        NULLIF(regexp_replace(wind_speed_raw ,'[^0-9.]','','g'), '')::NUMERIC AS wind_speed,
+       CASE wind_dir_raw
+           WHEN 'is-wind1'  THEN 0
+           WHEN 'is-wind2'  THEN 22.5
+           WHEN 'is-wind3'  THEN 45
+           WHEN 'is-wind4'  THEN 67.5
+           WHEN 'is-wind5'  THEN 90
+           WHEN 'is-wind6'  THEN 112.5
+           WHEN 'is-wind7'  THEN 135
+           WHEN 'is-wind8'  THEN 157.5
+           WHEN 'is-wind9'  THEN 180
+           WHEN 'is-wind10' THEN 202.5
+           WHEN 'is-wind11' THEN 225
+           WHEN 'is-wind12' THEN 247.5
+           WHEN 'is-wind13' THEN 270
+           WHEN 'is-wind14' THEN 292.5
+           WHEN 'is-wind15' THEN 315
+           WHEN 'is-wind16' THEN 337.5
+           ELSE NULL
+       END AS wind_dir_deg,
        NULLIF(regexp_replace(wave_height_raw,'[^0-9.]','','g'), '')::NUMERIC AS wave_height,
        NULLIF(regexp_replace(water_temp_raw ,'[^0-9.]','','g'), '')::NUMERIC AS water_temp,
        weather_txt

@@ -10,6 +10,7 @@ SELECT DISTINCT ON (b.race_key, b.lane)
        b.lane,
        b.racer_id,
        w.air_temp, w.wind_speed, w.wave_height, w.water_temp, w.weather_txt,
+       w.wind_dir_deg,
        b.st_time, b.fs_flag,
        b.weight, b.exh_time, b.tilt_deg,
        r.rank,
@@ -37,6 +38,7 @@ SELECT
     MAX(wave_height) AS wave_height,
     MAX(water_temp)  AS water_temp,
     MAX(weather_txt) AS weather_txt,
+    MAX(wind_dir_deg) AS wind_dir_deg,
 
     MAX(CASE WHEN lane=1 THEN racer_id END) AS lane1_racer_id,
     MAX(CASE WHEN lane=1 THEN weight   END) AS lane1_weight,

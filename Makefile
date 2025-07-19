@@ -45,6 +45,8 @@ initdb:
 	# ⑥ ビューを作成
 	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql/99_init_wrapper.sql
 
+	python sql/confirm.py
+
 .PHONY: db_list
 db_list:
 	psql -h $(DB_HOST) -U $(DB_USER) -d postgres -c "\list"

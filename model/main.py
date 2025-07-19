@@ -1,21 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[ ]:
-
-
-
-
-
-# In[ ]:
-
-
-
-
-
-
-
-# In[35]:
+# In[220]:
 
 
 import torch, tqdm
@@ -30,10 +16,10 @@ import datetime as dt
 from dotenv import load_dotenv
 
 
-# In[36]:
+# In[221]:
 
 
-load_dotenv()
+load_dotenv(override=True)
 
 DB_CONF = {
     "host":     os.getenv("PGHOST", "localhost"),
@@ -55,10 +41,15 @@ df = pd.read_sql("""
 print(f"Loaded {len(df)} rows from the database.")
 
 
-# In[37]:
+# In[222]:
 
 
-NUM_COLS = ["air_temp", "wind_speed", "wave_height", "water_temp"]
+# 風向をラジアンに変換し、sin/cos 特徴量を生成
+df["wind_dir_rad"] = np.deg2rad(df["wind_dir_deg"])
+df["wind_sin"] = np.sin(df["wind_dir_rad"])
+df["wind_cos"] = np.cos(df["wind_dir_rad"])
+
+NUM_COLS = ["air_temp", "wind_speed", "wave_height", "water_temp", "wind_sin", "wind_cos"]
 scaler = StandardScaler().fit(df[NUM_COLS])
 df[NUM_COLS] = scaler.transform(df[NUM_COLS])
 
@@ -85,7 +76,7 @@ scaler_filename = "artifacts/wind_scaler.pkl"
 joblib.dump(scaler, scaler_filename)
 
 
-# In[38]:
+# In[223]:
 
 
 def encode(col):
@@ -97,7 +88,7 @@ venue2id = encode("venue")
 # race_type2id = encode("race_type")
 
 
-# In[39]:
+# In[224]:
 
 
 class BoatRaceDataset(Dataset):
@@ -147,6 +138,7 @@ class BoatRaceDataset(Dataset):
         ctx = torch.tensor([
             r["wind_speed"], r["wave_height"],
             r["air_temp"],   r["water_temp"],
+            r["wind_sin"],   r["wind_cos"]
         ], dtype=torch.float32)
 
         # ❷ 各艇の元特徴量を収集 ---------------------------------------
@@ -212,7 +204,7 @@ class BoatRaceDataset(Dataset):
         )
 
 
-# In[40]:
+# In[225]:
 
 
 # ============================================================
@@ -244,9 +236,9 @@ peek_one(df)
 LANE_DIM = 8
 class SimpleCPLNet(nn.Module):
     """
-    ctx(4) + boat(4) → lane ごとにスコア 1 個
+    ctx(6) + boat(4) → lane ごとにスコア 1 個
     """
-    def __init__(self, ctx_in=4, boat_in=4, hidden=64, lane_dim=LANE_DIM):
+    def __init__(self, ctx_in=6, boat_in=4, hidden=64, lane_dim=LANE_DIM):
         super().__init__()
         self.lane_emb = nn.Embedding(6, lane_dim)
         self.ctx_fc   = nn.Linear(ctx_in, hidden)
@@ -271,7 +263,6 @@ class SimpleCPLNet(nn.Module):
         # 以外 (既に (B,6)) はそのままで OK
         lane_ids = lane_ids.contiguous()      # Embedding 要求に備え contiguous 化
 
-
         lane_emb = self.lane_emb(lane_ids)    # (B,6,lane_dim)
         boat_inp = torch.cat([boats, lane_emb], dim=-1)
         boat_emb = self.boat_fc(boat_inp)     # (B,6,h)
@@ -281,7 +272,7 @@ class SimpleCPLNet(nn.Module):
         return score.squeeze(-1)           # (B,6)
 
 
-# In[41]:
+# In[226]:
 
 
 def pl_nll(scores: torch.Tensor, ranks: torch.Tensor) -> torch.Tensor:
@@ -311,14 +302,15 @@ ranks  = torch.tensor([[1, 2, 3, 4, 5, 6]], dtype=torch.int64)    # lane0 が 1 
 print("pl_nll should be ~0 :", pl_nll(scores, ranks).item())
 
 
-# In[42]:
+# In[227]:
 
 
 df["race_date"] = pd.to_datetime(df["race_date"]).dt.date
 cutoff = dt.date(2024, 11, 1)
 
-ds_train = BoatRaceDataset(df[df["race_date"] <  cutoff])
-ds_val   = BoatRaceDataset(df[df["race_date"] >= cutoff])
+mode = "zscore"  # "raw", "log", "zscore" も試せる
+ds_train = BoatRaceDataset(df[df["race_date"] <  cutoff], mode=mode)
+ds_val   = BoatRaceDataset(df[df["race_date"] >= cutoff], mode=mode)
 print(f"train: {len(ds_train)}  val: {len(ds_val)}")
 # print("train:", ds_train[0])  # 1 レースの特徴量を確認
 
@@ -330,7 +322,7 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 model  = SimpleCPLNet().to(device)
 opt    = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-4)
 
-EPOCHS = 30
+EPOCHS = 20
 for epoch in range(EPOCHS):
 
     if epoch == 0:                  # 1 エポック目だけ試す例
@@ -400,7 +392,57 @@ for epoch in range(EPOCHS):
     acc_top1 = top1_accuracy(all_scores, all_ranks)
     acc_tri3 = trifecta_hit_rate(all_scores, all_ranks)
 
-    print(f"Top-1 Acc: {acc_top1:.3f}   Trifecta Hit: {acc_tri3:.3f}")
+    # print(f"Top-1 Acc: {acc_top1:.3f}   Trifecta Hit: {acc_tri3:.3f}")
+
+    # ---- 学習ログを CSV へ追記保存 ----
+    import csv
+    os.makedirs("artifacts", exist_ok=True)
+    log_path = f"artifacts/train_{mode}.csv"
+    # 1回目だけヘッダーを書き込む
+    write_header = epoch == 0 and not os.path.exists(log_path)
+    with open(log_path, mode="a", newline="") as f:
+        writer = csv.writer(f)
+        if write_header:
+            writer.writerow(["epoch", "train_nll", "val_nll", "top1_acc", "trifecta_hit"])
+        writer.writerow([epoch, tr_nll, val_nll, acc_top1, acc_tri3])
+
+
+
+# ---- Permutation Importance ----
+def evaluate_model(model, dataset, device):
+    model.eval()
+    loader = DataLoader(dataset, batch_size=512)
+    total_loss = 0
+    with torch.no_grad():
+        for ctx, boats, lane_ids, ranks in loader:
+            ctx, boats = ctx.to(device), boats.to(device)
+            lane_ids, ranks = lane_ids.to(device), ranks.to(device)
+            loss = pl_nll(model(ctx, boats, lane_ids), ranks)
+            total_loss += loss.item() * len(ctx)
+    return total_loss / len(dataset)
+
+def permute_importance(model, dataset, device="cpu", cols=None):
+    base_loss = evaluate_model(model, dataset, device)
+
+    importances = {}
+    df = dataset.f.copy()
+
+    if cols is None:
+        cols = ["wind_speed", "wave_height", "air_temp", "water_temp", "wind_dir_deg"]
+
+    for col in cols:
+        shuffled_df = df.copy()
+        shuffled_df[col] = np.random.permutation(shuffled_df[col].values)
+        temp_ds = BoatRaceDataset(shuffled_df, mode=dataset.mode)
+        loss = evaluate_model(model, temp_ds, device)
+        importances[col] = loss - base_loss  # 悪化分をスコアとする
+
+    return importances
+
+importance_scores = permute_importance(model, ds_val, device, cols=NUM_COLS)
+print("▼ 環境特徴量の重要度（val_nll 増加量）:")
+for k, v in sorted(importance_scores.items(), key=lambda x: -x[1]):
+    print(f"{k:12s}: {v:.4f}")
 
 
 # In[ ]:
@@ -422,7 +464,7 @@ def overfit_tiny(df: pd.DataFrame, device: str = "cpu"):
     データセットを 10 行だけに縮小し、500 step で過学習できるか検証
     """
     tiny_df = df.sample(10, random_state=1).reset_index(drop=True)
-    tiny_ds = BoatRaceDataset(tiny_df)
+    tiny_ds = BoatRaceDataset(tiny_df, mode=mode)
     tiny_loader = DataLoader(tiny_ds, batch_size=10, shuffle=True)
 
     net = SimpleCPLNet().to(device)

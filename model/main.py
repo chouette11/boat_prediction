@@ -7,67 +7,7 @@
 
 
 
-# In[ ]:
-
-
-
-
-
-
-
-# In[ ]:
-
-
-
-
-
-
-
-
-
-# In[ ]:
-
-
-
-
-
-
-
-
-
-
-
-# In[ ]:
-
-
-
-
-
-
-
-
-
-
-
-
-
-# In[ ]:
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# In[365]:
+# In[1]:
 
 
 import torch
@@ -84,6 +24,8 @@ import matplotlib.pyplot as plt
 # --- TensorBoard ---
 from torch.utils.tensorboard import SummaryWriter
 import time
+from BoatRaceDataset import BoatRaceDataset
+import itertools
 
 # --- reproducibility helpers ---
 import random  # reproducibility helpers
@@ -98,7 +40,7 @@ torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
 
-# In[366]:
+# In[2]:
 
 
 load_dotenv(override=True)
@@ -123,7 +65,7 @@ df = pd.read_sql("""
 print(f"Loaded {len(df)} rows from the database.")
 
 
-# In[367]:
+# In[3]:
 
 
 # 風向をラジアンに変換し、sin/cos 特徴量を生成
@@ -158,7 +100,7 @@ scaler_filename = "artifacts/wind_scaler.pkl"
 joblib.dump(scaler, scaler_filename)
 
 
-# In[368]:
+# In[4]:
 
 
 def encode(col):
@@ -170,123 +112,7 @@ venue2id = encode("venue")
 # race_type2id = encode("race_type")
 
 
-# In[369]:
-
-
-class BoatRaceDataset(Dataset):
-    """
-    - 数値列: float32, NaN/±inf → 0.0
-    - rank ∈ {1,2,3,4,5,6,…}  (重複可) を
-      *重複しない 1〜6 & 最下位以降* に正規化して返す
-    """
-    def __init__(self, frame: pd.DataFrame, mode: str = "diff"):
-        self.f = frame.copy()
-        self.mode = mode
-
-        # --- 数値列を float32, 欠損→0.0 -------------------------------
-        num_cols = self.f.select_dtypes(include=["number", "bool"]).columns
-        self.f[num_cols] = (
-            self.f[num_cols]
-            .replace([np.inf, -np.inf], np.nan)
-            .fillna(0.0)
-            .astype("float32")
-        )
-
-        if mode == "zscore":
-            self.boat_scaler = StandardScaler()
-            boat_feats = []
-            for lane in range(1, 7):
-                boat_feats.append(self.f[[f"lane{lane}_exh_time", f"lane{lane}_st", f"lane{lane}_weight"]].values)
-            boat_all = np.stack(boat_feats, axis=1).reshape(-1, 3)  # shape (N*6, 3)
-            self.boat_scaler.fit(boat_all)
-
-        # --- rank を int64 で保存 (欠損→99) ---------------------------
-        for lane in range(1, 7):
-            col = f"lane{lane}_rank"
-            if col in self.f.columns:
-                self.f[col] = (
-                    self.f[col]
-                    .fillna(99)          # 欠損は論外扱い
-                    .astype("int64")
-                )
-
-    def __len__(self):
-        return len(self.f)
-
-    def __getitem__(self, idx):
-        r = self.f.iloc[idx]
-
-        # ❶ 環境特徴量 --------------------------------------------------
-        ctx = torch.tensor([
-            r["wind_speed"], r["wave_height"],
-            r["air_temp"],   r["water_temp"],
-            r["wind_sin"],   r["wind_cos"]
-        ], dtype=torch.float32)
-
-        # ❷ 各艇の元特徴量を収集 ---------------------------------------
-        exh_times = [r[f"lane{lane}_exh_time"] for lane in range(1, 7)]
-        st_times  = [r[f"lane{lane}_st"] for lane in range(1, 7)]
-        fs_flags  = [float(r[f"lane{lane}_fs_flag"]) for lane in range(1, 7)]
-        weights   = [r[f"lane{lane}_weight"] for lane in range(1, 7)]
-        raw_ranks = [int(r[f"lane{lane}_rank"]) for lane in range(1, 7)]
-        lane_ids  = list(range(6))
-
-        boats = []
-        for i in range(6):
-            if self.mode == "diff":
-                mean_exh = np.mean(exh_times)
-                mean_st  = np.mean(st_times)
-                mean_wt  = np.mean(weights)
-                feat = [
-                    exh_times[i] - mean_exh,
-                    st_times[i]  - mean_st,
-                    fs_flags[i],
-                    weights[i]   - mean_wt,
-                ]
-            elif self.mode == "raw":
-                feat = [
-                    exh_times[i],
-                    st_times[i],
-                    fs_flags[i],
-                    weights[i],
-                ]
-            elif self.mode == "log":
-                feat = [
-                    np.log1p(exh_times[i]),
-                    np.log1p(st_times[i]),
-                    fs_flags[i],
-                    np.log1p(weights[i]),
-                ]
-            elif self.mode == "zscore":
-                inp = np.array([[exh_times[i], st_times[i], weights[i]]])
-                scaled = self.boat_scaler.transform(inp)[0]
-                feat = [
-                    scaled[0],
-                    scaled[1],
-                    fs_flags[i],
-                    scaled[2],
-                ]
-            else:
-                raise ValueError(f"Unknown mode: {self.mode}")
-
-            boats.append(torch.tensor(feat, dtype=torch.float32))
-
-        # ---------- ★ 重複しない順位を付け直す ★ ----------------------
-        # 例: [1, 2, 6, 3, 6, 6] → [1, 2, 4, 3, 5, 6]
-        order = np.argsort(raw_ranks)          # 小さい順に艇 index を並べる
-        new_rank = [0]*6
-        for new_pos, lane_idx in enumerate(order, start=1):  # new_pos:1..6
-            new_rank[lane_idx] = new_pos       # 一意な 1..6 を付け直し
-
-        return (
-            ctx,
-            torch.stack(boats),
-            torch.tensor(lane_ids, dtype=torch.int64),
-            torch.tensor(new_rank, dtype=torch.int64)
-        )
-
-
-# In[370]:
+# In[5]:
 
 
 # ============================================================
@@ -358,7 +184,7 @@ class SimpleCPLNet(nn.Module):
         return score.squeeze(-1)           # (B,6)
 
 
-# In[371]:
+# In[6]:
 
 
 def pl_nll(scores: torch.Tensor, ranks: torch.Tensor) -> torch.Tensor:
@@ -388,58 +214,7 @@ ranks  = torch.tensor([[1, 2, 3, 4, 5, 6]], dtype=torch.int64)    # lane0 が 1 
 print("pl_nll should be ~0 :", pl_nll(scores, ranks).item())
 
 
-# In[372]:
-
-
-def run_experiment(data_frac, df_full, mode="zscore", epochs=5, device="cpu"):
-    df_frac = df_full.sample(frac=data_frac, random_state=42)
-    df_frac["race_date"] = pd.to_datetime(df_frac["race_date"]).dt.date
-    latest_date = df_frac["race_date"].max()
-    cutoff = latest_date - dt.timedelta(days=90)  # last 3 months used as validation set
-    ds_train = BoatRaceDataset(df_frac[df_frac["race_date"] < cutoff], mode=mode)
-    ds_val = BoatRaceDataset(df_frac[df_frac["race_date"] >= cutoff], mode=mode)
-
-    loader_train = DataLoader(ds_train, batch_size=256, shuffle=True)
-    loader_val = DataLoader(ds_val, batch_size=512)
-
-    model = SimpleCPLNet().to(device)
-    opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-4)
-
-    for epoch in range(epochs):
-        model.train()
-        for ctx, boats, lane_ids, ranks in loader_train:
-            ctx, boats = ctx.to(device), boats.to(device)
-            lane_ids, ranks = lane_ids.to(device), ranks.to(device)
-            loss = pl_nll(model(ctx, boats, lane_ids), ranks)
-            opt.zero_grad(); loss.backward(); opt.step()
-
-    train_loss = evaluate_model(model, ds_train, device)
-    val_loss = evaluate_model(model, ds_val, device)
-    return train_loss, val_loss
-
-
-# In[373]:
-
-
-# 学習曲線の描画
-def plot_learning_curve(df, device):
-    data_fracs = [0.01, 0.05, 0.1, 0.2, 0.5, 1.0]
-    results = []
-
-    for frac in data_fracs:
-        tr_loss, val_loss = run_experiment(frac, df, device=device)
-        print(f"Data frac {frac:.2f} → Train: {tr_loss:.4f} / Val: {val_loss:.4f}")
-        results.append((frac, tr_loss, val_loss))
-
-    fracs, tr_losses, val_losses = zip(*results)
-    plt.plot(fracs, tr_losses, label="Train Loss")
-    plt.plot(fracs, val_losses, label="Val Loss")
-    plt.xlabel("Training Data Fraction")
-    plt.ylabel("Loss")
-    plt.title("Learning Curve")
-    plt.legend()
-    plt.grid(True)
-    plt.show()
+# In[7]:
 
 
 df["race_date"] = pd.to_datetime(df["race_date"]).dt.date
@@ -564,8 +339,6 @@ for epoch in range(EPOCHS):
 # --- Close TensorBoard writer after training ---
 writer.close()
 
-
-
 # ---- Permutation Importance ----
 def evaluate_model(model, dataset, device):
     model.eval()
@@ -601,6 +374,461 @@ importance_scores = permute_importance(model, ds_val, device, cols=NUM_COLS)
 print("▼ 環境特徴量の重要度（val_nll 増加量）:")
 for k, v in sorted(importance_scores.items(), key=lambda x: -x[1]):
     print(f"{k:12s}: {v:.4f}")
+
+
+
+# In[8]:
+
+
+def preprocess_df(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Common feature‑engineering pipeline shared by ROI/edge evaluation helpers.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Raw, unprocessed feature matrix fetched from SQL.
+
+    Returns
+    -------
+    pd.DataFrame
+        A *copy* of ``df`` with all feature‑engineering steps applied so that
+        downstream routines can mutate it safely.
+    """
+    df = df.copy()
+
+    # --- polar‑to‑cartesian wind features ---
+    df["wind_dir_rad"] = np.deg2rad(df["wind_dir_deg"])
+    df["wind_sin"] = np.sin(df["wind_dir_rad"])
+    df["wind_cos"] = np.cos(df["wind_dir_rad"])
+
+    # --- numeric scaling (vectorised) ---
+    df[NUM_COLS] = scaler.transform(df[NUM_COLS])
+
+    # --- fill boolean & rank columns ---
+    bool_cols = [c for c in df.columns if c.endswith("_fs_flag")]
+    df[bool_cols] = df[bool_cols].fillna(False)
+
+    rank_cols = [f"lane{l}_rank" for l in range(1, 7)]
+    df[rank_cols] = df[rank_cols].fillna(7).astype("int32")
+
+    return df
+
+def evaluate_roi(model, processed_df, device="cpu", mode="zscore", batch_size=512):
+    """
+    Vectorized ROI & hit-rate for 3-連単。
+    Returns (roi, hit_rate, returns_np) where returns_np は
+    各レースの払戻額 (的中→odds, 不的中→0) の 1D ndarray
+    """
+    df = processed_df
+
+    ds_eval = BoatRaceDataset(df, mode=mode)
+    loader  = DataLoader(ds_eval, batch_size=batch_size, shuffle=False)
+
+    preds_all = []
+    model.eval()
+    with torch.no_grad():
+        for ctx, boats, lane_ids, _ in loader:
+                ctx, boats, lane_ids = ctx.to(device), boats.to(device), lane_ids.to(device)
+                scores = model(ctx, boats, lane_ids)               # (B,6)
+                top3   = scores.argsort(dim=1, descending=True)[:, :3] + 1  # (B,3)
+                preds_all.append(top3.cpu().numpy())
+    preds = np.vstack(preds_all)                               # (N,3)
+
+    actual = df[["first_lane", "second_lane", "third_lane"]].to_numpy()
+    hit_mask = (preds == actual).all(axis=1)
+    returns  = np.where(hit_mask, df["odds"].values, 0.0)
+
+    roi       = returns.mean()
+    hit_rate  = hit_mask.mean()
+    return roi, hit_rate, returns
+
+# ---- 高速固定順位ベースライン -----------------------------------------
+def evaluate_roi_fixed(df_eval, pred_order=(1, 2, 3)):
+      mask = (
+      (df_eval["first_lane"]  == pred_order[0]) &
+      (df_eval["second_lane"] == pred_order[1]) &
+      (df_eval["third_lane"]  == pred_order[2])
+      )
+      returns = np.where(mask, df_eval["odds"].values, 0.0)
+      return returns.mean(), mask.mean(), returns
+
+# ---- ROI のリスク統計まとめ -------------------------------------------
+def evaluate_roi_stats(returns, n_boot=2000, seed=42):
+      """
+      returns: 1D ndarray (的中オッズ or 0)
+      戻り値: dict
+      """
+      roi = returns.mean()
+      std = returns.std(ddof=1)
+      se  = std / np.sqrt(len(returns))
+      ci_lo, ci_hi = roi - 1.96*se, roi + 1.96*se
+
+      # bootstrap
+      rng = np.random.default_rng(seed)
+      idx = rng.integers(0, len(returns), size=(n_boot, len(returns)))
+      boot_means = returns[idx].mean(axis=1)
+      ci_lo_bs, ci_hi_bs = np.percentile(boot_means, [2.5, 97.5])
+
+      sharpe = (roi - 1) / std if std else np.nan   # 1点賭け仮定
+
+      return {
+      "roi": roi,
+      "std": std,
+      "se":  se,
+      "ci95_norm": (ci_lo, ci_hi),
+      "ci95_boot": (ci_lo_bs, ci_hi_bs),
+      "sharpe_like": sharpe,
+      }
+
+def evaluate_roi_top_quantile(model, df_eval, device="cpu",
+                        quantile=0.2, **kwargs):
+      """
+      quantile=0.2 → “信頼度上位 20 % のレース” にだけ 1点賭け
+      戻り値: dict {roi, hit_rate, coverage, stats}
+      """
+      # returns_np, conf_np を取得
+      _, _, returns, conf = evaluate_roi_with_conf(model, df_eval,
+                                                device=device,
+                                                return_conf=True,
+                                                **kwargs)
+      thresh = np.quantile(conf, 1 - quantile)   # 上位 X %
+      mask   = conf >= thresh
+
+      returns_sel = returns[mask]
+      roi   = returns_sel.mean()
+      hit   = (returns_sel > 0).mean()
+      cover = mask.mean()            # ← ベット対象レース比率
+
+      stats = evaluate_roi_stats(returns_sel)
+
+      return {"roi": roi, "hit_rate": hit,
+            "coverage": cover, **stats}
+
+# ---- ROI ＋ conf　--------------------------------------------
+# ------------------------------------------------------------
+# ⑧ ── ROI evaluation with edge & Kelly filter
+#      「edge ≥ τ かつ kelly > 0」の賭け戦略をオフラインで検証
+# ------------------------------------------------------------
+def evaluate_roi_edge_filter(model,
+                             df_eval: pd.DataFrame,
+                             device: str = "cpu",
+                             tau: float = 0.25,
+                             kelly_clip: float = 1.0,
+                             mode: str = "zscore",
+                             batch_size: int = 512):
+    """
+    戻り値: dict {roi, hit_rate, coverage, stats...}
+    coverage = 条件を満たすレース比率（≒ ベット対象の割合）
+    """
+    # (1) edge / kelly を計算
+    df_edge = compute_edge_dataframe(model, df_eval,
+                                     device=device, mode=mode,
+                                     batch_size=batch_size)
+    mask = (df_edge["edge"] >= tau) & (df_edge["kelly"] > 0)
+
+    # (2) ベースとなる returns を取得
+    _, _, returns = evaluate_roi(model, df_eval,
+                                 device=device, mode=mode,
+                                 batch_size=batch_size)
+
+    returns_sel = returns[mask.values]
+    roi   = returns_sel.mean()
+    hit   = (returns_sel > 0).mean()
+    cover = mask.mean()
+
+    stats = evaluate_roi_stats(returns_sel)
+    return {"roi": roi, "hit_rate": hit,
+            "coverage": cover, **stats}
+
+def evaluate_roi_with_conf(model, df_eval, device="cpu",mode="zscore", batch_size=512,return_conf=False):
+    """
+    returns:
+    roi, hit_rate, returns_np[, conf_np]
+    * returns_np … 的中時オッズ, 不的中0
+    * conf_np     … そのレースの“信頼度”スコア
+    """
+    df = preprocess_df(df_eval)
+
+    ds_eval = BoatRaceDataset(df, mode=mode)
+    loader  = DataLoader(ds_eval, batch_size=batch_size, shuffle=False)
+
+    preds_all, conf_all = [], []
+    model.eval()
+    with torch.no_grad():
+        for ctx, boats, lane_ids, _ in loader:
+                ctx, boats, lane_ids = ctx.to(device), boats.to(device), lane_ids.to(device)
+                scores = model(ctx, boats, lane_ids)                     # (B,6)
+
+                # ---- ❶ trifecta 予測 -------------------------------
+                top3 = scores.argsort(dim=1, descending=True)[:, :3] + 1 # (B,3)
+                preds_all.append(top3.cpu().numpy())
+
+                # ---- ❷ “信頼度”指標  ------------------------------
+                # ここでは 1着と2着スコア差を採用（大きい=自信あり）
+                top2 = scores.topk(2, dim=1).values                      # (B,2)
+                conf = (top2[:, 0] - top2[:, 1]).cpu().numpy()           # (B,)
+                conf_all.append(conf)
+
+    preds = np.vstack(preds_all)                # (N,3)
+    confs = np.concatenate(conf_all)            # (N,)
+
+    actual = df[["first_lane", "second_lane", "third_lane"]].to_numpy()
+    hit_mask = (preds == actual).all(axis=1)
+    returns  = np.where(hit_mask, df["odds"].values, 0.0)
+
+    roi      = returns.mean()
+    hit_rate = hit_mask.mean()
+
+    if return_conf:
+        return roi, hit_rate, returns, confs
+    else:
+        return roi, hit_rate, returns
+
+# ---- ROI evaluation on feat.eval_features --------------------------
+df_eval = pd.read_sql("SELECT * FROM feat.eval_features", conn)
+
+processed_df = preprocess_df(df_eval)
+
+# モデル
+roi, hit_rate, ret = evaluate_roi(model, df_eval, device)
+stats = evaluate_roi_stats(ret)
+
+# ベースライン
+roi_fixed, hit_fixed, ret_fixed = evaluate_roi_fixed(df_eval)
+stats_fixed = evaluate_roi_stats(ret_fixed)
+
+print("▼ モデル ROI            :",  f"{roi:.3f} (Hit {hit_rate:.3%})")
+print("  - 95%CI norm          :",  f"[{stats['ci95_norm'][0]:.3f}, {stats['ci95_norm'][1]:.3f}]")
+print("  - 95%CI boot          :",  f"[{stats['ci95_boot'][0]:.3f}, {stats['ci95_boot'][1]:.3f}]")
+print("  - σ / SE / Sharpe-like:",  f"{stats['std']:.3f} / {stats['se']:.4f} / {stats['sharpe_like']:.3f}")
+
+print("▼ 固定1-2-3 ROI         :",  f"{roi_fixed:.3f} (Hit {hit_fixed:.3%})")
+print("  - 95%CI norm          :",  f"[{stats_fixed['ci95_norm'][0]:.3f}, {stats_fixed['ci95_norm'][1]:.3f}]")
+print("   → ROI 差分           :",  f"{roi - roi_fixed:+.3f}")
+
+# ---- ROI evaluation on feat.eval_features --------------------------
+# (2) 上位 20 % だけ賭ける
+sim20 = evaluate_roi_top_quantile(model, df_eval, device, quantile=0.01)
+print("\n▼ 上位20% ROI :", f"{sim20['roi']:.3f}  Hit {sim20['hit_rate']:.3%}"
+      f"  Coverage {sim20['coverage']:.1%}")
+print("  95%CI :", f"[{sim20['ci95_norm'][0]:.3f}, {sim20['ci95_norm'][1]:.3f}]  "
+      "(norm)")
+
+# ============================================================
+# ⑥ ── Market‑vs‑Model “edge” 計算ユーティリティ
+#       trifecta のミスプライシングを DataFrame で返す
+# ------------------------------------------------------------
+
+def pl_trifecta_prob(scores: torch.Tensor, lanes: tuple[int, int, int]) -> float:
+    """
+    Plackett‑Luce で lane(0‑based) の組 (a,b,c) が 1‑2‑3 着となる確率を計算する。
+    scores : (6,) Tensor
+    lanes  : (a,b,c)  0‑based lane index
+    """
+    s = scores.clone()
+    prob = 1.0
+    for idx in lanes:
+        p = torch.softmax(s, dim=0)[idx]
+        prob *= p
+        s[idx] = -1e9                     # “抜いた”扱いで次着へ
+    return prob.item()
+
+
+def compute_edge_dataframe(model,
+                           df_eval: pd.DataFrame,
+                           device: str = "cpu",
+                           mode: str = "zscore",
+                           batch_size: int = 512,
+                           rake: float = 0.25) -> pd.DataFrame:
+    """
+    各レースの (first_lane,second_lane,third_lane) に対応する
+    * 市場確率 p_market
+    * モデル確率 p_model
+    * edge = odds * p_model − 1
+    を計算して返す DataFrame。
+
+    戻り値列:
+      [first_lane, second_lane, third_lane, odds, p_market, p_model, edge]
+    """
+    df = preprocess_df(df_eval)
+
+    # --- prepare lane indices once (0‑based int64, shape (N,3)) ---
+    lanes_np = df[["first_lane", "second_lane", "third_lane"]].to_numpy(dtype=np.int64) - 1
+
+    ds_eval = BoatRaceDataset(df, mode=mode)
+    loader  = DataLoader(ds_eval, batch_size=batch_size, shuffle=False)
+
+    p_model_list = []
+    model.eval()
+    row_idx = 0
+    with torch.no_grad():
+        for ctx, boats, lane_ids, _ in loader:
+            ctx, boats, lane_ids = ctx.to(device), boats.to(device), lane_ids.to(device)
+            scores = model(ctx, boats, lane_ids)                 # (B,6)
+            B = scores.size(0)
+            # --- vectorised Plackett‑Luce prob for actual lanes ---
+            batch_lanes = torch.from_numpy(lanes_np[row_idx: row_idx + B]).to(device)
+            probs = torch.softmax(scores, dim=1)                             # (B,6)
+            batch_probs = torch.gather(probs, 1, batch_lanes)               # (B,3)
+            p_mod_batch = batch_probs.prod(dim=1).cpu().numpy()             # (B,)
+            p_model_list.extend(p_mod_batch.tolist())
+            row_idx += B
+
+    # market implied probability (optional rake normalisation)
+    p_market = (1.0 / df["odds"]).values           # raw implied
+    p_market *= (1.0 - rake)                       # adjust for 25 %控除率
+
+    edge = df["odds"].values * np.array(p_model_list) - 1.0
+
+    df_edge = df[["first_lane", "second_lane", "third_lane", "odds"]].copy()
+    df_edge["p_market"] = p_market
+    df_edge["p_model"]  = p_model_list
+    df_edge["edge"]     = edge
+    df_edge["kelly"]    = df_edge["edge"] / df_edge["odds"]
+    return df_edge
+
+
+# ------------------------------------------------------------
+# ⑦ ── 発注リスト生成
+#      edge ≥ τ かつ kelly > 0 を満たす行のみ抽出
+# ------------------------------------------------------------
+def make_order_list(df_edge: pd.DataFrame,
+                    tau: float = 0.25,
+                    kelly_clip: float = 1.0) -> pd.DataFrame:
+    """
+    Parameters
+    ----------
+    df_edge : DataFrame returned by `compute_edge_dataframe`
+    tau     : edge threshold (default 0.25 ≒ 控除率25 %をカバー)
+    kelly_clip : 最大ベット単位数；1.0 で“1 点”上限
+
+    Returns
+    -------
+    DataFrame with an extra column 'bet_units' (clipped Kelly)
+    """
+    df = df_edge.copy()
+    mask = (df["edge"] >= tau) & (df["kelly"] > 0)
+    orders = df.loc[mask].copy()
+    orders["bet_units"] = orders["kelly"].clip(0, kelly_clip)
+    return orders.sort_values("edge", ascending=False)
+
+
+
+# ------------------------------------------------------------
+# ⑨ ── SINGLE‑PASS Metrics computation
+#      1 回の推論で ROI / conf / edge / kelly を全部まとめて取る
+# ------------------------------------------------------------
+def compute_metrics_dataframe(model,
+                              df_eval: pd.DataFrame,
+                              device: str = "cpu",
+                              mode: str = "zscore",
+                              batch_size: int = 512,
+                              rake: float = 0.25) -> pd.DataFrame:
+    """
+    Returns DataFrame with:
+      ['first_lane','second_lane','third_lane','odds',
+       'pred1','pred2','pred3','conf',
+       'p_model','edge','kelly',
+       'hit','returns']
+    """
+    df = preprocess_df(df_eval)
+
+    # lanes indices & DataLoader
+    lanes_np = df[["first_lane", "second_lane", "third_lane"]].to_numpy(dtype=np.int64) - 1
+    ds_eval  = BoatRaceDataset(df, mode=mode)
+    loader   = DataLoader(ds_eval, batch_size=batch_size, shuffle=False)
+
+    preds_all, conf_all, p_model_list = [], [], []
+    model.eval(); row_idx = 0
+    with torch.no_grad():
+        for ctx, boats, lane_ids, _ in loader:
+            ctx, boats, lane_ids = ctx.to(device), boats.to(device), lane_ids.to(device)
+            scores   = model(ctx, boats, lane_ids)                   # (B,6)
+            B        = scores.size(0)
+            # --- predictions & confidence (top‑3 & diff top1‑top2) ---
+            top3 = scores.argsort(dim=1, descending=True)[:, :3] + 1  # (B,3)
+            preds_all.append(top3.cpu().numpy())
+
+            top2_vals = scores.topk(2, dim=1).values
+            conf_batch = (top2_vals[:, 0] - top2_vals[:, 1]).cpu().numpy()
+            conf_all.append(conf_batch)
+
+            # --- p_model for actual lanes (vectorised PL) ------------
+            batch_lanes = torch.from_numpy(lanes_np[row_idx: row_idx + B]).to(device)
+            probs = torch.softmax(scores, dim=1)
+            p_mod_batch = torch.gather(probs, 1, batch_lanes).prod(dim=1).cpu().numpy()
+            p_model_list.extend(p_mod_batch.tolist())
+
+            row_idx += B
+
+    preds = np.vstack(preds_all)                 # (N,3)
+    confs = np.concatenate(conf_all)             # (N,)
+
+    # ---------- market / edge ----------
+    p_market = (1.0 / df["odds"]).values
+    p_market *= (1.0 - rake)
+    edge  = df["odds"].values * np.array(p_model_list) - 1.0
+    kelly = edge / df["odds"].values
+
+    # ---------- hit / returns ----------
+    actual   = df[["first_lane", "second_lane", "third_lane"]].to_numpy()
+    hit_mask = (preds == actual).all(axis=1)
+    returns  = np.where(hit_mask, df["odds"].values, 0.0)
+
+    # ---------- assemble ----------
+    df_met = df[["first_lane", "second_lane", "third_lane", "odds"]].copy()
+    df_met[["pred1","pred2","pred3"]] = preds
+    df_met["conf"]    = confs
+    df_met["p_model"] = p_model_list
+    df_met["edge"]    = edge
+    df_met["kelly"]   = kelly
+    df_met["hit"]     = hit_mask
+    df_met["returns"] = returns
+    return df_met
+
+
+def evaluate_roi_edge_filter_fast(model,
+                                  df_eval: pd.DataFrame,
+                                  device: str = "cpu",
+                                  tau: float = 0.25,
+                                  kelly_clip: float = 1.0,
+                                  mode: str = "zscore",
+                                  batch_size: int = 512):
+    """
+    Single‑pass版 edge フィルター ROI 評価
+    """
+    df_met = compute_metrics_dataframe(model, df_eval, device,
+                                       mode=mode, batch_size=batch_size)
+    mask = (df_met["edge"] >= tau) & (df_met["kelly"] > 0)
+    returns_sel = df_met.loc[mask, "returns"].values
+    roi   = returns_sel.mean()
+    hit   = (returns_sel > 0).mean()
+    cover = mask.mean()
+
+    stats = evaluate_roi_stats(returns_sel)
+    return {"roi": roi, "hit_rate": hit, "coverage": cover, **stats}
+
+# --- Usage Example ---
+# --- Example: edge distribution on evaluation set ---
+df_edge = compute_edge_dataframe(model, df_eval, device=device)
+print("edge > 0 ratio :", (df_edge["edge"] > 0).mean())
+print(df_edge.sort_values("edge", ascending=False).head())
+
+# --- Build order list ---
+tau = 0.25
+order_df = make_order_list(df_edge, tau)
+print(f"\n発注リスト (edge ≥ {tau:.2f} & kelly>0): {len(order_df)} 件")
+print(order_df[["first_lane","second_lane","third_lane","odds","edge","kelly","bet_units"]]
+        .head())
+
+# (3) edge & Kelly フィルター戦略のオフライン評価
+sim_edge = evaluate_roi_edge_filter_fast(model, df_eval, device,
+                                            tau=tau, kelly_clip=1.0)
+print(f"\n▼ edge≥{tau:.2f} & kelly>0 ROI : {sim_edge['roi']:.3f}"
+        f"  Hit {sim_edge['hit_rate']:.3%}"
+        f"  Coverage {sim_edge['coverage']:.1%}")
+print("  95%CI norm :", f"[{sim_edge['ci95_norm'][0]:.3f}, {sim_edge['ci95_norm'][1]:.3f}]")
 
 
 # In[ ]:
@@ -692,6 +920,52 @@ if __name__ == "__main__":
 # ============================================================
 # ★ 予測用スクリプト（直近3ヶ月データを使って予測） ★
 # ============================================================
+
+def run_experiment(data_frac, df_full, mode="zscore", epochs=5, device="cpu"):
+    df_frac = df_full.sample(frac=data_frac, random_state=42)
+    df_frac["race_date"] = pd.to_datetime(df_frac["race_date"]).dt.date
+    latest_date = df_frac["race_date"].max()
+    cutoff = latest_date - dt.timedelta(days=90)  # last 3 months used as validation set
+    ds_train = BoatRaceDataset(df_frac[df_frac["race_date"] < cutoff], mode=mode)
+    ds_val = BoatRaceDataset(df_frac[df_frac["race_date"] >= cutoff], mode=mode)
+
+    loader_train = DataLoader(ds_train, batch_size=256, shuffle=True)
+    loader_val = DataLoader(ds_val, batch_size=512)
+
+    model = SimpleCPLNet().to(device)
+    opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-4)
+
+    for epoch in range(epochs):
+        model.train()
+        for ctx, boats, lane_ids, ranks in loader_train:
+            ctx, boats = ctx.to(device), boats.to(device)
+            lane_ids, ranks = lane_ids.to(device), ranks.to(device)
+            loss = pl_nll(model(ctx, boats, lane_ids), ranks)
+            opt.zero_grad(); loss.backward(); opt.step()
+
+    train_loss = evaluate_model(model, ds_train, device)
+    val_loss = evaluate_model(model, ds_val, device)
+    return train_loss, val_loss
+
+# 学習曲線の描画
+def plot_learning_curve(df, device):
+    data_fracs = [0.01, 0.05, 0.1, 0.2, 0.5, 1.0]
+    results = []
+
+    for frac in data_fracs:
+        tr_loss, val_loss = run_experiment(frac, df, device=device)
+        print(f"Data frac {frac:.2f} → Train: {tr_loss:.4f} / Val: {val_loss:.4f}")
+        results.append((frac, tr_loss, val_loss))
+
+    fracs, tr_losses, val_losses = zip(*results)
+    plt.plot(fracs, tr_losses, label="Train Loss")
+    plt.plot(fracs, val_losses, label="Val Loss")
+    plt.xlabel("Training Data Fraction")
+    plt.ylabel("Loss")
+    plt.title("Learning Curve")
+    plt.legend()
+    plt.grid(True)
+    plt.show()
 
 def predict_latest_3months():
     import datetime as dt

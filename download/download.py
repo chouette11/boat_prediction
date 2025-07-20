@@ -42,9 +42,9 @@ def fetch_results(start_ymd: str, kind: str, days: int = 3, interval_sec: int = 
                 print(f"⏳ {interval_sec}秒待機中...\n")
                 time.sleep(interval_sec)
 
-            # 次の日へ
-            current_date += timedelta(days=1)
-
+        # 次の日へ
+        current_date += timedelta(days=1)
+:
 
 if __name__ == "__main__":
     kinds = ["raceresult", "beforeinfo", "odds3t"]

@@ -1,4 +1,4 @@
-DB_NAME      := ver1_6
+DB_NAME      := ver1_9
 DB_USER      := keiichiro
 DB_HOST      := localhost
 
@@ -32,6 +32,10 @@ db_merge:
 db_5:
 	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql/05_views_core.sql
 
+.PHONY: db_6
+db_6:
+	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql/06_views_feat.sql
+
 .PHONY: initdb
 initdb:
 	# ① データベースを削除
@@ -64,3 +68,7 @@ to_ipynb:
 tensorboard:
 	# TensorBoardを起動
 	tensorboard --logdir model/artifacts/tb --port 6006
+
+.PHONY: session
+session:
+	@psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -c "SELECT pid, usename AS user, datname AS database, application_name, state, query, query_start FROM pg_stat_activity WHERE state != 'idle' ORDER BY query_start DESC;"

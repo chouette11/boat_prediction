@@ -104,7 +104,7 @@ INSERT INTO raw.person (
     stadium, race_date, race_no,
     boat_no, reg_no, name, age,
     class_now, class_hist1, class_hist2, class_hist3,
-    ability_now, ability_prev,
+    ability_now,
     "F_now", "L_now",
     winrate_natl, "2in_natl", "3in_natl",
     nat_1st, nat_2nd, nat_3rd, nat_starts,
@@ -121,7 +121,7 @@ SELECT
     race_no_ex::int,
     boat_no, reg_no, name, age,
     class_now, class_hist1, class_hist2, class_hist3,
-    ability_now, ability_prev,
+    ability_now,
     "F_now", "L_now",
     winrate_natl, "2in_natl", "3in_natl",
     nat_1st, nat_2nd, nat_3rd, nat_starts,
@@ -175,4 +175,40 @@ SELECT
     wind_dir_icon,
     water_temp_c, wave_height_cm
 FROM ws
+ON CONFLICT DO NOTHING;
+
+------------------------------------------------------------
+-- 4) odds3t_staging → raw.odds3t
+------------------------------------------------------------
+DO $$
+BEGIN
+    ALTER TABLE raw.odds3t
+    ADD CONSTRAINT odds3t_unique UNIQUE (stadium, race_date, race_no,
+                                         first_lane, second_lane, third_lane);
+EXCEPTION
+    WHEN duplicate_object THEN
+        RAISE NOTICE 'Constraint odds3t_unique already exists.';
+END
+$$;
+
+WITH os AS (
+    SELECT *,
+           (regexp_match(right(source_file, 100),
+                  'wakamatsu_odds3t_[0-9]+_([0-9]{8})_([0-9]+)_odds_matrix\.csv$'))[1] AS yyyymmdd,
+            (regexp_match(right(source_file, 100),
+                  'wakamatsu_odds3t_[0-9]+_([0-9]{8})_([0-9]+)_odds_matrix\.csv$'))[2] AS race_no_ex
+    FROM raw.odds3t_staging
+    WHERE right(source_file, 100) ~ 'wakamatsu_odds3t_[0-9]+_[0-9]{8}_[0-9]+_odds_matrix\.csv$'
+)
+INSERT INTO raw.odds3t (
+    stadium, race_date, race_no,
+    first_lane, second_lane, third_lane, odds, source_file
+)
+SELECT
+    '若松',
+    to_date(yyyymmdd, 'YYYYMMDD'),
+    race_no_ex::int,
+    first_lane, second_lane, third_lane,
+    odds, source_file
+FROM os
 ON CONFLICT DO NOTHING;

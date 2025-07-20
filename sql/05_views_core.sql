@@ -1,10 +1,16 @@
 /*------------------------------------------------------------
   05_views_core.sql
   CORE レイヤ（集約ビュー）
+  マテビューを DROP/CREATE ではなく REFRESH で更新する版
 ------------------------------------------------------------*/
 
+-- =========================================================
+-- マテビュー定義 & 初回のみ作成（IF NOT EXISTS）
+-- その後に REFRESH でデータを最新化
+-- =========================================================
+
 -- レース一覧 ------------------------------------------------
-CREATE MATERIALIZED VIEW core.races AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS core.races AS
 SELECT DISTINCT
        stadium,
        race_date,
@@ -13,7 +19,7 @@ SELECT DISTINCT
 FROM raw.results;
 
 -- 着順 ------------------------------------------------------
-CREATE MATERIALIZED VIEW core.results AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS core.results AS
 SELECT DISTINCT ON (race_key, lane)
        core.f_race_key(race_date, race_no, stadium) AS race_key,
        lane,
@@ -25,6 +31,7 @@ SELECT DISTINCT ON (race_key, lane)
 FROM raw.results
 ORDER BY race_key, lane, source_file DESC;
 
+-- ボート・選手情報（通常 VIEW） ------------------------------
 CREATE OR REPLACE VIEW core.boat_info AS
 SELECT DISTINCT ON (r.race_key, r.lane)
        r.race_key,
@@ -51,7 +58,7 @@ SELECT DISTINCT ON (r.race_key, r.lane)
        p.class_hist1,
        p.class_hist2,
        p.class_hist3,
-       p.ability_prev,
+       -- p.ability_prev,
        p."F_now",
        p."L_now",
        p.nat_1st,
@@ -88,7 +95,7 @@ LEFT JOIN raw.person p
 ORDER BY r.race_key, r.lane, r.st_entry;
 
 -- 天候 ------------------------------------------------------
-CREATE MATERIALIZED VIEW core.weather AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS core.weather AS
 SELECT DISTINCT ON (race_key)
        core.f_race_key(race_date, race_no, stadium) AS race_key,
        NULLIF(regexp_replace(air_temp_raw   ,'[^0-9.]','','g'), '')::NUMERIC AS air_temp,
@@ -117,6 +124,30 @@ SELECT DISTINCT ON (race_key)
        weather_txt
 FROM raw.weather
 ORDER BY race_key, obs_time_label DESC;
+
+-- オッズ（3連単） -------------------------------------------
+CREATE MATERIALIZED VIEW IF NOT EXISTS core.odds3t AS
+SELECT DISTINCT ON (race_key, first_lane, second_lane, third_lane)
+       core.f_race_key(race_date, race_no, stadium) AS race_key,
+       first_lane,
+       second_lane,
+       third_lane,
+       odds
+FROM raw.odds3t
+ORDER BY race_key,
+         first_lane,
+         second_lane,
+         third_lane,
+         source_file DESC;
+
+-- ==========================================================
+-- REFRESH MATERIALIZED VIEWS
+-- ==========================================================
+
+REFRESH MATERIALIZED VIEW core.races;
+REFRESH MATERIALIZED VIEW core.results;
+REFRESH MATERIALIZED VIEW core.weather;
+REFRESH MATERIALIZED VIEW core.odds3t;
 
 -- ==========================================================
 -- データ存在チェック（core.* のマテビューすべて）

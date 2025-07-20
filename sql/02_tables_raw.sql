@@ -87,6 +87,14 @@ CREATE TABLE IF NOT EXISTS raw.person_staging (
     race_no         INT
 );
 
+CREATE TABLE IF NOT EXISTS raw.odds3t_staging (
+    first_lane      INT,
+    second_lane     INT,
+    third_lane      INT,
+    odds            NUMERIC,
+    source_file     TEXT
+);
+
 /*--- 本テーブル --------------------------------------------*/
 CREATE TABLE IF NOT EXISTS raw.results (
     stadium        TEXT NOT NULL DEFAULT '若松',
@@ -139,7 +147,7 @@ CREATE TABLE IF NOT EXISTS raw.person (
     class_hist2     TEXT,
     class_hist3     TEXT,
     ability_now     INT,
-    ability_prev    INT,
+    -- ability_prev    INT,
     "F_now"         INT,
     "L_now"         INT,
     winrate_natl    NUMERIC,
@@ -168,4 +176,15 @@ CREATE TABLE IF NOT EXISTS raw.person (
     boa_3rd         INT,
     boa_starts      INT,
     source_file     TEXT
+);
+
+CREATE TABLE IF NOT EXISTS raw.odds3t (
+    stadium        TEXT NOT NULL DEFAULT '若松',
+    race_date      DATE NOT NULL,
+    race_no        INT  NOT NULL,
+    first_lane     INT  NOT NULL,
+    second_lane    INT  NOT NULL,
+    third_lane     INT  NOT NULL,
+    odds           NUMERIC,
+    source_file    TEXT
 );

@@ -198,12 +198,137 @@ def _load_person(engine, path: str) -> None:
     )
 
 # ---------------------------------------------------------------------------
+# 3.6 *_odds3t_*.csv → raw.odds3t_staging
+# ---------------------------------------------------------------------------
+
+def _load_odds3t(engine, path: str) -> None:
+    """
+    Load 3‑連単オッズ CSV into raw.odds3t_staging.
+
+    Supported file formats
+    ----------------------
+    1) **Flat**: columns = first_lane, second_lane, third_lane, odds
+       The loader just enforces numeric types and appends `source_file`.
+    2) **Matrix** (official *odds_matrix.csv*):
+       - 1 header row (lane numbers / racer names) + 20 data rows
+       - Each data row holds 6 triples of the form (second_lane, third_lane, odds)
+       - Across the 20 rows the 120 permutations are laid out in a fixed,
+         lane‑ascending order. We unpivot the matrix, then reconstruct the full
+         (first_lane, second_lane, third_lane) permutation list in the same
+         canonical order:
+             first_lane asc, second_lane asc (≠ first), third_lane asc (≠ first, second)
+    """
+    import csv
+    from pathlib import Path
+
+    p = Path(path)
+
+    # ──────────────────────────────────────────────────────────
+    # helper: canonical permutation order (120 combos)
+    lanes = [1, 2, 3, 4, 5, 6]
+    combos_order = [
+        (i, j, k)
+        for i in lanes
+        for j in lanes
+        if j != i
+        for k in lanes
+        if k not in (i, j)
+    ]
+
+    # ──────────────────────────────────────────────────────────
+    # 1) Try reading as a “flat” file first
+    try:
+        df = pd.read_csv(p)
+        if {"first_lane", "second_lane", "third_lane", "odds"}.issubset(df.columns):
+            num_cols = ["first_lane", "second_lane", "third_lane", "odds"]
+            df[num_cols] = df[num_cols].apply(pd.to_numeric, errors="coerce")
+        else:
+            raise ValueError  # fall through to matrix parser
+    except Exception:
+        # ──────────────────────────────────────────────────────
+        # 2) odds_matrix fallback parser
+        # ──────────────────────────────────────────────────────
+        with p.open(newline="", encoding="utf-8") as f:
+            rows = list(csv.reader(f))
+
+        if len(rows) <= 1:
+            print(f"⚠ odds file {p} has insufficient rows; skipped.", file=sys.stderr)
+            return
+
+        # Drop header row (lane numbers / names)
+        data_rows = rows[1:]
+
+        # Extract numeric tokens only
+        numeric: list[float] = []
+        for r in data_rows:
+            for cell in r:
+                try:
+                    numeric.append(float(cell))
+                except ValueError:
+                    continue  # skip racer names etc.
+
+        # Each permutation appears as 3 consecutive numeric values
+        triples = [
+            numeric[i : i + 3] for i in range(0, len(numeric), 3)
+        ]
+
+        if len(triples) != len(combos_order):
+            print(
+                f"⚠ {p.name}: expected {len(combos_order)} triples, "
+                f"got {len(triples)}; proceeding with best‑effort mapping.",
+                file=sys.stderr,
+            )
+
+        records = []
+        for idx, trip in enumerate(triples):
+            if len(trip) != 3:
+                continue
+            sec_lane, thr_lane, odds_val = trip
+            # Use canonical permutation list for first/second/third so that we
+            # always have a deterministic (i,j,k) regardless of matrix quirks.
+            if idx < len(combos_order):
+                fst_lane, snd_lane, trd_lane = combos_order[idx]
+            else:
+                # Fallback: reconstruct third_lane programmatically
+                fst_lane = int(sec_lane)  # best guess
+                snd_lane = int(thr_lane)
+                trd_lane = next(
+                    l for l in lanes if l not in (fst_lane, snd_lane)
+                )
+            records.append(
+                {
+                    "first_lane": fst_lane,
+                    "second_lane": snd_lane,
+                    "third_lane": trd_lane,
+                    "odds": odds_val,
+                    "source_file": str(p),
+                }
+            )
+
+        df = pd.DataFrame.from_records(records)
+
+    if "source_file" not in df.columns:
+        df["source_file"] = str(p)
+
+    print(df.head(5))
+
+    print(f"df.shape = {df.shape}")
+    df.to_sql(
+        "odds3t_staging",
+        con=engine,
+        schema="raw",
+        if_exists="append",
+        index=False,
+        method="multi",
+    )
+
+# ---------------------------------------------------------------------------
 # 4. ローダ設定
 # ---------------------------------------------------------------------------
 
 _LOADERS = {
-        "person": ("*_person_*.csv", _load_person),
-
+    "odds3t": ("*_odds3t_*.csv", _load_odds3t),
+    "person": ("*_person_*.csv", _load_person),
     "results": ("*_results.csv", _load_results),
     "beforeinfo": ("*_beforeinfo.csv", _load_beforeinfo),
     "weather": ("*_weather.csv", _load_weather),
@@ -220,6 +345,7 @@ def main() -> None:
         "beforeinfo": Path(os.getenv("CSV_DIR_BEFOREINFO", "download/wakamatsu_off_beforeinfo_csv")),
         "weather": Path(os.getenv("CSV_DIR_BEFOREINFO", "download/wakamatsu_off_beforeinfo_csv")),
         "person": Path(os.getenv("CSV_DIR_PERSON", "download/wakamatsu_person_csv")),
+        "odds3t": Path(os.getenv("CSV_DIR_ODDS", "download/wakamatsu_off_odds3t_csv")),
     }
 
     user = os.getenv("PGUSER", "keiichiro")

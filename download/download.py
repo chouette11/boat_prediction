@@ -18,7 +18,7 @@ def fetch_results(start_ymd: str, kind: str, days: int = 3, interval_sec: int = 
         target_ymd = current_date.strftime("%Y%m%d")
         print(target_ymd)
         target_url = f"{base_url}&hd={target_ymd}"
-        for j in range(1, 12):
+        for j in range(1, 13):
             target_url_no = f"{target_url}&rno={j}"
             print(f"▶ 取得中: {target_url_no} ...")
             try:
@@ -47,7 +47,7 @@ def fetch_results(start_ymd: str, kind: str, days: int = 3, interval_sec: int = 
 
 
 if __name__ == "__main__":
-    kinds = ["raceresult", "beforeinfo", "odds3t"]
+    kinds = [ "odds3t"]
     start_ymd = "20220101"  # 開始年月日
     days = 700  # 取得したい日数
     interval_sec = 1  # 各リクエストの待機秒数

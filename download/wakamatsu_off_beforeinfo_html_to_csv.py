@@ -122,9 +122,9 @@ def parse_boat_race_html(html_path: str, encoding: str = "utf-8") -> None:
     st_data = []
     for i, div in enumerate(soup.select(".table1_boatImage1")):
         lane = div.select_one(".table1_boatImage1Number").get_text(strip=True)
-        entry = i + 1  # 進入
+        course = i + 1  # 進入
         st   = div.select_one(".table1_boatImage1Time").get_text(strip=True)
-        st_data.append({"lane": lane, "ST": st, "entry": entry})
+        st_data.append({"lane": lane, "ST": st, "course": course})
 
     if not st_data:
         csv_dir = "download/wakamatsu_off_beforeinfo_csv"

@@ -5,7 +5,7 @@ def confirm(conn):
     cur = conn.cursor()
     for table in [
         "raw.results_staging", "raw.beforeinfo_staging","raw.weather_staging",
-        "raw.results", "raw.racers", "raw.weather",
+        "raw.results", "raw.beforeinfo", "raw.weather",
         "core.boat_info", "core.weather",
         "feat.boat_flat", "feat.train_features"
     ]:

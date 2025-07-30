@@ -64,7 +64,7 @@ def _load_results(engine, path: str) -> None:
         "racer_no",
         "racer_name",
         "arrival_time",
-        "st_entry",
+        "course",
         "st_time_raw",
         "tactic",
         "stadium",
@@ -86,7 +86,7 @@ def _load_results(engine, path: str) -> None:
         df.loc[df["race_no"].isna(), "race_no"] = race_no_from_fn
 
     # 数値列を明示的に変換
-    num_cols = ["lane", "racer_no", "st_entry", "st_time_raw", "race_no"]
+    num_cols = ["lane", "racer_no", "course", "st_time_raw", "race_no"]
     df[num_cols] = df[num_cols].apply(pd.to_numeric, errors="coerce")
 
     # source_file が入っていなければファイル名をそのままセット
@@ -108,7 +108,7 @@ def _load_results(engine, path: str) -> None:
 def _load_beforeinfo(engine, path: str) -> None:
     df = pd.read_csv(path)
 
-    df = df.rename(columns={"ST": "st_raw", "entry": "st_entry"})
+    df = df.rename(columns={"ST": "st_time_raw"})
 
     required_cols = [
         "lane",
@@ -120,14 +120,13 @@ def _load_beforeinfo(engine, path: str) -> None:
         "tilt",
         "photo",
         "source_file",
-        "st_raw",
-        "st_entry",
+        "course",
     ]
     for col in required_cols:
         if col not in df.columns:
             df[col] = pd.NA
 
-    numeric_cols = ["adjust_weight", "exhibition_time", "tilt", "st_entry"]
+    numeric_cols = ["adjust_weight", "exhibition_time", "tilt", "course"]
     df[numeric_cols] = df[numeric_cols].apply(pd.to_numeric, errors="coerce")
 
     df.to_sql(
@@ -201,7 +200,7 @@ def _load_person(engine, path: str) -> None:
 # 3.6 *_odds3t_*.csv → raw.odds3t_staging
 # ---------------------------------------------------------------------------
 
-def _load_odds3t(engine, path: str) -> None:
+def load_odds3t(engine, path: str) -> None:
     """
     Load 3‑連単オッズ CSV into raw.odds3t_staging.
 
@@ -221,19 +220,14 @@ def _load_odds3t(engine, path: str) -> None:
     import csv
     from pathlib import Path
 
+    if not "matrix" in path:
+        return
+
     p = Path(path)
 
     # ──────────────────────────────────────────────────────────
-    # helper: canonical permutation order (120 combos)
-    lanes = [1, 2, 3, 4, 5, 6]
-    combos_order = [
-        (i, j, k)
-        for i in lanes
-        for j in lanes
-        if j != i
-        for k in lanes
-        if k not in (i, j)
-    ]
+    lanes = [1, 2, 3, 4, 5, 6]  # for validation / fallbacks
+    expected_triples = 120      # 6P3 permutations
 
     # ──────────────────────────────────────────────────────────
     # 1) Try reading as a “flat” file first
@@ -255,62 +249,57 @@ def _load_odds3t(engine, path: str) -> None:
             print(f"⚠ odds file {p} has insufficient rows; skipped.", file=sys.stderr)
             return
 
-        # Drop header row (lane numbers / names)
+        # ------------------------------------------------------------------
+        # Parse official odds_matrix layout: 6 lanes × 20 rows → 120 triples
+        # ------------------------------------------------------------------
+        header = rows[0]
         data_rows = rows[1:]
+        n_cols = len(header)
+        group_indices = [i for i in range(0, n_cols, 3)]  # 3 cols per lane
 
-        # Extract numeric tokens only
-        numeric: list[float] = []
-        for r in data_rows:
-            for cell in r:
+        records = []
+        for col_start in group_indices:
+            # Derive first_lane purely from the column position:
+            # col_start = 0 → lane 1, 3 → lane 2, 6 → lane 3, …
+            fst_lane = col_start // 3 + 1
+
+            for row in data_rows:
+                # Ensure we have a complete (sec, thr, odds) triple
+                if col_start + 2 >= len(row):
+                    continue
                 try:
-                    numeric.append(float(cell))
+                    sec_lane = int(float(row[col_start]))
+                    thr_lane = int(float(row[col_start + 1]))
+                    odds_val = float(row[col_start + 2])
                 except ValueError:
-                    continue  # skip racer names etc.
+                    # Skip rows containing non‑numeric cells
+                    continue
 
-        # Each permutation appears as 3 consecutive numeric values
-        triples = [
-            numeric[i : i + 3] for i in range(0, len(numeric), 3)
-        ]
+                records.append(
+                    {
+                        "first_lane":  fst_lane,
+                        "second_lane": sec_lane,
+                        "third_lane":  thr_lane,
+                        "odds":        odds_val,
+                        "source_file": str(p),
+                    }
+                )
 
-        if len(triples) != len(combos_order):
+        if len(records) != expected_triples:
             print(
-                f"⚠ {p.name}: expected {len(combos_order)} triples, "
-                f"got {len(triples)}; proceeding with best‑effort mapping.",
+                f"⚠ {p.name}: expected {expected_triples} triples, "
+                f"got {len(records)}; check parsing logic.",
                 file=sys.stderr,
             )
 
-        records = []
-        for idx, trip in enumerate(triples):
-            if len(trip) != 3:
-                continue
-            sec_lane, thr_lane, odds_val = trip
-            # Use canonical permutation list for first/second/third so that we
-            # always have a deterministic (i,j,k) regardless of matrix quirks.
-            if idx < len(combos_order):
-                fst_lane, snd_lane, trd_lane = combos_order[idx]
-            else:
-                # Fallback: reconstruct third_lane programmatically
-                fst_lane = int(sec_lane)  # best guess
-                snd_lane = int(thr_lane)
-                trd_lane = next(
-                    l for l in lanes if l not in (fst_lane, snd_lane)
-                )
-            records.append(
-                {
-                    "first_lane": fst_lane,
-                    "second_lane": snd_lane,
-                    "third_lane": trd_lane,
-                    "odds": odds_val,
-                    "source_file": str(p),
-                }
-            )
-
         df = pd.DataFrame.from_records(records)
+        num_cols = ["first_lane", "second_lane", "third_lane", "odds"]
+        df[num_cols] = df[num_cols].apply(pd.to_numeric, errors="coerce")
 
     if "source_file" not in df.columns:
         df["source_file"] = str(p)
 
-    print(df.head(5))
+    print(df.head(20))
 
     print(f"df.shape = {df.shape}")
     df.to_sql(
@@ -327,7 +316,7 @@ def _load_odds3t(engine, path: str) -> None:
 # ---------------------------------------------------------------------------
 
 _LOADERS = {
-    "odds3t": ("*_odds3t_*.csv", _load_odds3t),
+    "odds3t": ("*_odds3t_*.csv", load_odds3t),
     "person": ("*_person_*.csv", _load_person),
     "results": ("*_results.csv", _load_results),
     "beforeinfo": ("*_beforeinfo.csv", _load_beforeinfo),
@@ -339,6 +328,8 @@ _LOADERS = {
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    from dotenv import load_dotenv
+    load_dotenv(override=True)
     
     csv_root = {
         "results": Path(os.getenv("CSV_DIR_RESULTS", "download/wakamatsu_off_raceresult_csv")),
@@ -370,8 +361,21 @@ def main() -> None:
 
     print("✔ Staging import complete.")
 
-
-if __name__ == "__main__":
+def loader_test() -> None:
+    """Test loader functions with a specific file."""
     from dotenv import load_dotenv
     load_dotenv(override=True)
+
+    engine = create_engine(
+        f"postgresql://{os.getenv('PGUSER', 'keiichiro')}@"
+        f"{os.getenv('PGHOST', 'localhost')}:"
+        f"{os.getenv('PGPORT', '5432')}/"
+        f"{os.getenv('PGDATABASE', 'ver1_0')}"
+    )
+
+    # Example: Load a specific odds3t file
+    load_odds3t(engine, "download/wakamatsu_off_odds3t_csv/wakamatsu_odds3t_20_20250717_10_odds_matrix.csv")
+
+if __name__ == "__main__":
     main()
+    # loader_test()  # Uncomment to test a specific loader function

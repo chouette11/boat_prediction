@@ -1,4 +1,4 @@
-DB_NAME      := ver1_9
+DB_NAME      := ver1_2
 DB_USER      := keiichiro
 DB_HOST      := localhost
 
@@ -8,6 +8,11 @@ psql:
 
 .PHONY: db_drop
 db_drop:
+	psql -h $(DB_HOST) -U $(DB_USER) -d postgres -c "DROP DATABASE IF EXISTS $(DB_NAME);"
+
+.PHONY: db_drop_all
+db_drop_all:
+	psql -h $(DB_HOST) -U $(DB_USER) -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$(DB_NAME)';"
 	psql -h $(DB_HOST) -U $(DB_USER) -d postgres -c "DROP DATABASE IF EXISTS $(DB_NAME);"
 
 .PHONY: db_create
@@ -62,7 +67,7 @@ db_list:
 .PHONY: to_ipynb
 to_ipynb:
 	# Jupyter Notebookに変換
-	jupytext model/main.py --to notebook
+	jupytext model/main2.py --to notebook
 
 .PHONY: tensorboard
 tensorboard:

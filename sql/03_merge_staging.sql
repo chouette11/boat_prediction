@@ -26,7 +26,7 @@ WITH rs AS (
 )
 INSERT INTO raw.results (
     stadium, race_date, race_no, lane,
-    position_txt, racer_no, st_time_raw, source_file
+    position_txt, racer_no, st_time_raw, course, source_file
 )
 SELECT
     COALESCE(stadium, '若松') AS stadium,
@@ -36,20 +36,21 @@ SELECT
     position_txt,
     racer_no,
     st_time_raw,
+    course,
     source_file
 FROM rs
 ON CONFLICT DO NOTHING;
 
 ------------------------------------------------------------
--- 2) beforeinfo_staging → raw.racers
+-- 2) beforeinfo_staging → raw.beforeinfo
 ------------------------------------------------------------
 DO $$
 BEGIN
-    ALTER TABLE raw.racers
-    ADD CONSTRAINT racers_unique UNIQUE (stadium, race_date, race_no, lane);
+    ALTER TABLE raw.beforeinfo
+    ADD CONSTRAINT beforeinfo_unique UNIQUE (stadium, race_date, race_no, lane);
 EXCEPTION
     WHEN duplicate_object THEN
-        RAISE NOTICE 'Constraint racers_unique already exists.';
+        RAISE NOTICE 'Constraint beforeinfo_unique already exists.';
 END
 $$;
 
@@ -62,10 +63,10 @@ WITH bfs AS (
     FROM raw.beforeinfo_staging
     WHERE right(source_file, 100) ~ 'beforeinfo_[0-9]+_[0-9]{8}_[0-9]+\.html$'
 )
-INSERT INTO raw.racers (
+INSERT INTO raw.beforeinfo (
     stadium, race_date, race_no, lane,
     racer_id, weight_raw, adjust_weight,
-    exh_time, tilt_deg, st_raw, st_entry
+    exh_time, tilt_deg, st_time_raw, course
 )
 SELECT
     '若松',
@@ -74,7 +75,7 @@ SELECT
     lane,
     racer_id, weight, adjust_weight,
     exhibition_time, tilt,
-    st_raw, st_entry
+    st_time_raw, course
 FROM bfs
 ON CONFLICT DO NOTHING;
 

@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS raw.results_staging (
     racer_no       INT,
     racer_name     TEXT,
     arrival_time   TEXT,
-    st_entry       INT,
+    course         INT,
     st_time_raw    TEXT,
     tactic         TEXT,
     stadium        TEXT,
@@ -30,8 +30,8 @@ CREATE TABLE IF NOT EXISTS raw.beforeinfo_staging (
     tilt              NUMERIC,
     photo             TEXT,
     source_file       TEXT,
-    st_raw            TEXT,
-    st_entry          INT
+    st_time_raw       TEXT,
+    course            INT
 );
 
 CREATE TABLE IF NOT EXISTS raw.weather_staging (
@@ -101,13 +101,14 @@ CREATE TABLE IF NOT EXISTS raw.results (
     race_date      DATE NOT NULL,
     race_no        INT  NOT NULL,
     lane           INT  NOT NULL,
+    course         INT,
     position_txt   TEXT,
     racer_no       INT,
     st_time_raw    TEXT,
     source_file    TEXT
 );
 
-CREATE TABLE IF NOT EXISTS raw.racers (
+CREATE TABLE IF NOT EXISTS raw.beforeinfo (
     stadium        TEXT NOT NULL DEFAULT '若松',
     race_date      DATE NOT NULL,
     race_no        INT  NOT NULL,
@@ -117,8 +118,8 @@ CREATE TABLE IF NOT EXISTS raw.racers (
     adjust_weight  NUMERIC,
     exh_time       NUMERIC,
     tilt_deg       NUMERIC,
-    st_raw         TEXT,
-    st_entry       INT
+    st_time_raw         TEXT,
+    course         INT
 );
 
 CREATE TABLE IF NOT EXISTS raw.weather (

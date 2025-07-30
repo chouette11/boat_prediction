@@ -33,19 +33,38 @@ ORDER BY race_key, lane, source_file DESC;
 
 -- ボート・選手情報（通常 VIEW） ------------------------------
 CREATE OR REPLACE VIEW core.boat_info AS
-SELECT DISTINCT ON (r.race_key, r.lane)
-       r.race_key,
-       r.lane,
-       r.racer_id,
-       CAST(regexp_replace(r.weight_raw, '[^0-9.]', '', 'g') AS NUMERIC(5,1)) AS weight,
-       r.exh_time,
-       r.tilt_deg,
-       (substr(r.st_raw, 1, 1) = 'F') AS fs_flag,
+SELECT DISTINCT ON (b.race_key, b.lane)
+       b.race_key,
+       b.lane,
+       b.racer_id,
+       CAST(regexp_replace(b.weight_raw, '[^0-9.]', '', 'g') AS NUMERIC(5,1)) AS weight,
+       b.exh_time,
+       b.tilt_deg,
+       (substr(b.st_time_raw, 1, 1) = 'F') AS fs_flag,
        CASE
-           WHEN regexp_replace(r.st_raw, '^F', '') ~ '^\.\d{2}$' THEN
-               CAST('0' || regexp_replace(r.st_raw, '^F', '') AS NUMERIC(4,2))
-           WHEN regexp_replace(r.st_raw, '^F', '') ~ '^\d{1}\.\d{1,2}$' THEN
-               CAST(regexp_replace(r.st_raw, '^F', '') AS NUMERIC(4,2))
+           WHEN b.st_time_raw LIKE 'F%' THEN
+               CASE
+                   WHEN regexp_replace(b.st_time_raw, '^F', '') ~ '^\.\d{2}$' THEN
+                       -CAST('0' || regexp_replace(b.st_time_raw, '^F', '') AS NUMERIC(4,2))
+                   WHEN regexp_replace(b.st_time_raw, '^F', '') ~ '^\d{1}\.\d{1,2}$' THEN
+                       -CAST(regexp_replace(b.st_time_raw, '^F', '') AS NUMERIC(4,2))
+                   ELSE
+                       NULL
+               END
+           WHEN regexp_replace(b.st_time_raw, '^F', '') ~ '^\.\d{2}$' THEN
+               CAST('0' || regexp_replace(b.st_time_raw, '^F', '') AS NUMERIC(4,2))
+           WHEN regexp_replace(b.st_time_raw, '^F', '') ~ '^\d{1}\.\d{1,2}$' THEN
+               CAST(regexp_replace(b.st_time_raw, '^F', '') AS NUMERIC(4,2))
+           ELSE
+               NULL
+       END AS bf_st_time,
+       b.course AS bf_course,
+       r.course AS course,
+       CASE
+           WHEN regexp_replace(r.st_time_raw, '^F', '') ~ '^\.\d{2}$' THEN
+               CAST('0' || regexp_replace(r.st_time_raw, '^F', '') AS NUMERIC(4,2))
+           WHEN regexp_replace(r.st_time_raw, '^F', '') ~ '^\d{1}\.\d{1,2}$' THEN
+               CAST(regexp_replace(r.st_time_raw, '^F', '') AS NUMERIC(4,2))
            ELSE
                NULL
        END AS st_time,
@@ -86,13 +105,16 @@ SELECT DISTINCT ON (r.race_key, r.lane)
 FROM (
     SELECT *,
            core.f_race_key(race_date, race_no, stadium) AS race_key
-    FROM raw.racers
-) r
+    FROM raw.beforeinfo
+) b
 LEFT JOIN raw.person p
-  ON p.reg_no = r.racer_id
- AND core.f_race_key(p.race_date, p.race_no, p.stadium) = r.race_key
- AND p.boat_no = r.lane
-ORDER BY r.race_key, r.lane, r.st_entry;
+  ON p.reg_no = b.racer_id
+ AND core.f_race_key(p.race_date, p.race_no, p.stadium) = b.race_key
+ AND p.boat_no = b.lane
+LEFT JOIN raw.results r
+  ON core.f_race_key(r.race_date, r.race_no, r.stadium) = b.race_key
+ AND r.lane = b.lane
+ORDER BY b.race_key, b.lane, b.course;
 
 -- 天候 ------------------------------------------------------
 CREATE MATERIALIZED VIEW IF NOT EXISTS core.weather AS

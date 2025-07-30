@@ -51,7 +51,10 @@ SELECT DISTINCT ON (b.race_key, b.lane)
        w.water_temp,
        w.weather_txt,
        w.wind_dir_deg,
+       b.bf_st_time,
+       b.bf_course,
        b.st_time,
+       b.course,
        b.fs_flag,
        b.weight,
        b.exh_time,
@@ -86,6 +89,9 @@ SELECT
     MAX(CASE WHEN lane=1 THEN weight END) AS lane1_weight,
     MAX(CASE WHEN lane=1 THEN exh_time END) AS lane1_exh_time,
     MAX(CASE WHEN lane=1 THEN st_time END) AS lane1_st,
+    MAX(CASE WHEN lane=1 THEN course END) AS lane1_course,
+    MAX(CASE WHEN lane=1 THEN bf_st_time END) AS lane1_bf_st_time,
+    MAX(CASE WHEN lane=1 THEN bf_course END) AS lane1_bf_course,
     BOOL_OR(fs_flag) FILTER (WHERE lane=1)  AS lane1_fs_flag,
     MAX(CASE WHEN lane=1 THEN rank END) AS lane1_rank,
     MAX(CASE WHEN lane=1 THEN class_now END) AS lane1_class_now,
@@ -125,7 +131,10 @@ SELECT
     MAX(CASE WHEN lane=2 THEN racer_id END) AS lane2_racer_id,
     MAX(CASE WHEN lane=2 THEN weight END) AS lane2_weight,
     MAX(CASE WHEN lane=2 THEN exh_time END) AS lane2_exh_time,
+    MAX(CASE WHEN lane=2 THEN bf_st_time END) AS lane2_bf_st_time,
+    MAX(CASE WHEN lane=2 THEN bf_course END) AS lane2_bf_course,
     MAX(CASE WHEN lane=2 THEN st_time END) AS lane2_st,
+    MAX(CASE WHEN lane=2 THEN course END) AS lane2_course,
     BOOL_OR(fs_flag) FILTER (WHERE lane=2)  AS lane2_fs_flag,
     MAX(CASE WHEN lane=2 THEN rank END) AS lane2_rank,
     MAX(CASE WHEN lane=2 THEN class_now END) AS lane2_class_now,
@@ -165,7 +174,10 @@ SELECT
     MAX(CASE WHEN lane=3 THEN racer_id END) AS lane3_racer_id,
     MAX(CASE WHEN lane=3 THEN weight END) AS lane3_weight,
     MAX(CASE WHEN lane=3 THEN exh_time END) AS lane3_exh_time,
+    MAX(CASE WHEN lane=3 THEN bf_st_time END) AS lane3_bf_st_time,
+    MAX(CASE WHEN lane=3 THEN bf_course END) AS lane3_bf_course,
     MAX(CASE WHEN lane=3 THEN st_time END) AS lane3_st,
+    MAX(CASE WHEN lane=3 THEN course END) AS lane3_course,
     BOOL_OR(fs_flag) FILTER (WHERE lane=3)  AS lane3_fs_flag,
     MAX(CASE WHEN lane=3 THEN rank END) AS lane3_rank,
     MAX(CASE WHEN lane=3 THEN class_now END) AS lane3_class_now,
@@ -205,7 +217,10 @@ SELECT
     MAX(CASE WHEN lane=4 THEN racer_id END) AS lane4_racer_id,
     MAX(CASE WHEN lane=4 THEN weight END) AS lane4_weight,
     MAX(CASE WHEN lane=4 THEN exh_time END) AS lane4_exh_time,
+    MAX(CASE WHEN lane=4 THEN bf_st_time END) AS lane4_bf_st_time,
+    MAX(CASE WHEN lane=4 THEN bf_course END) AS lane4_bf_course,
     MAX(CASE WHEN lane=4 THEN st_time END) AS lane4_st,
+    MAX(CASE WHEN lane=4 THEN course END) AS lane4_course,
     BOOL_OR(fs_flag) FILTER (WHERE lane=4)  AS lane4_fs_flag,
     MAX(CASE WHEN lane=4 THEN rank END) AS lane4_rank,
     MAX(CASE WHEN lane=4 THEN class_now END) AS lane4_class_now,
@@ -245,7 +260,10 @@ SELECT
     MAX(CASE WHEN lane=5 THEN racer_id END) AS lane5_racer_id,
     MAX(CASE WHEN lane=5 THEN weight END) AS lane5_weight,
     MAX(CASE WHEN lane=5 THEN exh_time END) AS lane5_exh_time,
+    MAX(CASE WHEN lane=5 THEN bf_st_time END) AS lane5_bf_st_time,
+    MAX(CASE WHEN lane=5 THEN bf_course END) AS lane5_bf_course,
     MAX(CASE WHEN lane=5 THEN st_time END) AS lane5_st,
+    MAX(CASE WHEN lane=5 THEN course END) AS lane5_course,
     BOOL_OR(fs_flag) FILTER (WHERE lane=5)  AS lane5_fs_flag,
     MAX(CASE WHEN lane=5 THEN rank END) AS lane5_rank,
     MAX(CASE WHEN lane=5 THEN class_now END) AS lane5_class_now,
@@ -285,7 +303,10 @@ SELECT
     MAX(CASE WHEN lane=6 THEN racer_id END) AS lane6_racer_id,
     MAX(CASE WHEN lane=6 THEN weight END) AS lane6_weight,
     MAX(CASE WHEN lane=6 THEN exh_time END) AS lane6_exh_time,
+    MAX(CASE WHEN lane=6 THEN bf_st_time END) AS lane6_bf_st_time,
+    MAX(CASE WHEN lane=6 THEN bf_course END) AS lane6_bf_course,
     MAX(CASE WHEN lane=6 THEN st_time END) AS lane6_st,
+    MAX(CASE WHEN lane=6 THEN course END) AS lane6_course,
     BOOL_OR(fs_flag) FILTER (WHERE lane=6)  AS lane6_fs_flag,
     MAX(CASE WHEN lane=6 THEN rank END) AS lane6_rank,
     MAX(CASE WHEN lane=6 THEN class_now END) AS lane6_class_now,
@@ -328,6 +349,100 @@ GROUP BY race_key
 HAVING COUNT(DISTINCT race_date)=1
    AND COUNT(DISTINCT venue)=1;
 
+/* ---------- 学習用特徴量（feat.train_features） ---------- */
+CREATE MATERIALIZED VIEW IF NOT EXISTS feat.train_features2 AS
+WITH flat AS (
+    SELECT bf.*,
+           cr.stadium AS venue
+    FROM feat.boat_flat bf
+    JOIN core.races cr USING (race_key)
+)
+SELECT
+    race_key,
+    MAX(race_date)   AS race_date,
+    MAX(venue)       AS venue,
+    MAX(air_temp)    AS air_temp,
+    MAX(wind_speed)  AS wind_speed,
+    MAX(wave_height) AS wave_height,
+    MAX(water_temp)  AS water_temp,
+    MAX(weather_txt) AS weather_txt,
+    MAX(wind_dir_deg) AS wind_dir_deg,
+    MAX(CASE WHEN lane=1 THEN racer_id END) AS lane1_racer_id,
+    MAX(CASE WHEN lane=1 THEN weight END) AS lane1_weight,
+    MAX(CASE WHEN lane=1 THEN exh_time END) AS lane1_exh_time,
+    MAX(CASE WHEN lane=1 THEN bf_st_time END) AS lane1_bf_st_time,
+    MAX(CASE WHEN lane=1 THEN bf_course END) AS lane1_bf_course,
+    MAX(CASE WHEN lane=1 THEN st_time END) AS lane1_st,
+    MAX(CASE WHEN lane=1 THEN course END) AS lane1_course,
+    BOOL_OR(fs_flag) FILTER (WHERE lane=1)  AS lane1_fs_flag,
+    MAX(CASE WHEN lane=1 THEN rank END) AS lane1_rank,
+    MAX(CASE WHEN lane=2 THEN racer_id END) AS lane2_racer_id,
+    MAX(CASE WHEN lane=2 THEN weight END) AS lane2_weight,
+    MAX(CASE WHEN lane=2 THEN exh_time END) AS lane2_exh_time,
+    MAX(CASE WHEN lane=2 THEN bf_st_time END) AS lane2_bf_st_time,
+    MAX(CASE WHEN lane=2 THEN bf_course END) AS lane2_bf_course,
+    MAX(CASE WHEN lane=2 THEN st_time END) AS lane2_st,
+    MAX(CASE WHEN lane=2 THEN course END) AS lane2_course,
+    BOOL_OR(fs_flag) FILTER (WHERE lane=2)  AS lane2_fs_flag,
+    MAX(CASE WHEN lane=2 THEN rank END) AS lane2_rank,
+    MAX(CASE WHEN lane=3 THEN racer_id END) AS lane3_racer_id,
+    MAX(CASE WHEN lane=3 THEN weight END) AS lane3_weight,
+    MAX(CASE WHEN lane=3 THEN exh_time END) AS lane3_exh_time,
+    MAX(CASE WHEN lane=3 THEN bf_st_time END) AS lane3_bf_st_time,
+    MAX(CASE WHEN lane=3 THEN bf_course END) AS lane3_bf_course,
+    MAX(CASE WHEN lane=3 THEN st_time END) AS lane3_st,
+    MAX(CASE WHEN lane=3 THEN course END) AS lane3_course,
+    BOOL_OR(fs_flag) FILTER (WHERE lane=3)  AS lane3_fs_flag,
+    MAX(CASE WHEN lane=3 THEN rank END) AS lane3_rank,
+    MAX(CASE WHEN lane=4 THEN racer_id END) AS lane4_racer_id,
+    MAX(CASE WHEN lane=4 THEN weight END) AS lane4_weight,
+    MAX(CASE WHEN lane=4 THEN exh_time END) AS lane4_exh_time,
+    MAX(CASE WHEN lane=4 THEN bf_st_time END) AS lane4_bf_st_time,
+    MAX(CASE WHEN lane=4 THEN bf_course END) AS lane4_bf_course,
+    MAX(CASE WHEN lane=4 THEN st_time END) AS lane4_st,
+    MAX(CASE WHEN lane=4 THEN course END) AS lane4_course,
+    BOOL_OR(fs_flag) FILTER (WHERE lane=4)  AS lane4_fs_flag,
+    MAX(CASE WHEN lane=4 THEN rank END) AS lane4_rank,
+    MAX(CASE WHEN lane=5 THEN racer_id END) AS lane5_racer_id,
+    MAX(CASE WHEN lane=5 THEN weight END) AS lane5_weight,
+    MAX(CASE WHEN lane=5 THEN exh_time END) AS lane5_exh_time,
+    MAX(CASE WHEN lane=5 THEN bf_st_time END) AS lane5_bf_st_time,
+    MAX(CASE WHEN lane=5 THEN bf_course END) AS lane5_bf_course,
+    MAX(CASE WHEN lane=5 THEN st_time END) AS lane5_st,
+    MAX(CASE WHEN lane=5 THEN course END) AS lane5_course,
+    BOOL_OR(fs_flag) FILTER (WHERE lane=5)  AS lane5_fs_flag,
+    MAX(CASE WHEN lane=5 THEN rank END) AS lane5_rank,
+    MAX(CASE WHEN lane=6 THEN racer_id END) AS lane6_racer_id,
+    MAX(CASE WHEN lane=6 THEN weight END) AS lane6_weight,
+    MAX(CASE WHEN lane=6 THEN exh_time END) AS lane6_exh_time,
+    MAX(CASE WHEN lane=6 THEN bf_st_time END) AS lane6_bf_st_time,
+    MAX(CASE WHEN lane=6 THEN bf_course END) AS lane6_bf_course,
+    MAX(CASE WHEN lane=6 THEN st_time END) AS lane6_st,
+    MAX(CASE WHEN lane=6 THEN course END) AS lane6_course,
+    BOOL_OR(fs_flag) FILTER (WHERE lane=6)  AS lane6_fs_flag,
+    MAX(CASE WHEN lane=6 THEN rank END) AS lane6_rank
+
+FROM flat
+GROUP BY race_key
+HAVING COUNT(DISTINCT race_date)=1
+   AND COUNT(DISTINCT venue)=1;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS feat.racer_hist_30d AS
+SELECT
+    b.racer_id,
+    COUNT(*)                                AS starts_30d,
+    AVG(CASE WHEN r.rank = 1 THEN 1 ELSE 0 END)::float AS winrate_30d,
+    AVG(b.exh_time)                         AS exh_mean_30d,
+    AVG(b.st_time)                          AS st_mean_30d
+FROM core.boat_info b
+JOIN core.results r
+  ON b.race_key = r.race_key AND b.lane = r.lane
+JOIN core.races cr
+  ON b.race_key = cr.race_key
+WHERE cr.race_date >= NOW() - INTERVAL '30 days'
+GROUP BY b.racer_id;
+
+
 /* ---------- 評価用特徴量（feat.eval_features） ---------- */
 CREATE MATERIALIZED VIEW IF NOT EXISTS feat.eval_features AS
 SELECT
@@ -339,9 +454,27 @@ SELECT
 FROM feat.train_features tf
 JOIN core.odds3t o USING (race_key);
 
+/* ---------- 評価用特徴量（feat.eval_features） ---------- */
+CREATE MATERIALIZED VIEW IF NOT EXISTS feat.eval_features2 AS
+SELECT
+    tf.*,
+    o.first_lane,
+    o.second_lane,
+    o.third_lane,
+    o.odds
+FROM feat.train_features2 tf
+JOIN core.odds3t o USING (race_key);
+
 /* ---------- REFRESH 文 ---------- */
+\echo '--- boat_flat 層のマテリアライズドビューを更新中 ---'
 REFRESH MATERIALIZED VIEW feat.boat_flat;
+\echo '--- train_features 層のマテリアライズドビューを更新中 ---'
 REFRESH MATERIALIZED VIEW feat.train_features;
+\echo '--- train_features2 層のマテリアライズドビューを更新中 ---'
+REFRESH MATERIALIZED VIEW feat.train_features2;
+\echo '--- racer_hist_30d 層のマテリアライズドビューを更新中 ---'
+REFRESH MATERIALIZED VIEW feat.racer_hist_30d;
+\echo '--- eval_features 層のマテリアライズドビューを更新中 ---'
 REFRESH MATERIALIZED VIEW feat.eval_features;
 
 /* ---------- データ存在チェック ---------- */

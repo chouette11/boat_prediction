@@ -6,3 +6,4 @@ diff.patch
 *.pkl
 *.pt
 events.out.*
+*.pyc

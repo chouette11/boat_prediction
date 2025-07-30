@@ -7,7 +7,15 @@
 
 
 
-# In[1]:
+# In[ ]:
+
+
+
+
+
+
+
+# In[12]:
 
 
 import torch
@@ -40,7 +48,7 @@ torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
 
-# In[2]:
+# In[13]:
 
 
 load_dotenv(override=True)
@@ -62,10 +70,30 @@ df = pd.read_sql("""
     WHERE race_date <= '2024-12-31'
 """, conn)
 
+
 print(f"Loaded {len(df)} rows from the database.")
 
+# ------------------------------------------------------------------
+# Low‑cost performance boost:
+# 30‑day rolling stats per racer (starts, win‑rate, etc.)
+# ------------------------------------------------------------------
+try:
+    hist30 = pd.read_sql("SELECT * FROM feat.racer_hist_30d", conn)
+    # add lane‑specific suffixes and left‑join for every lane
+    for lane in range(1, 7):
+        df = df.merge(
+            hist30.add_suffix(f"_l{lane}"),            # e.g. starts_30d_l1
+            how="left",
+            left_on=f"lane{lane}_racer_id",
+            right_on=f"racer_id_l{lane}"
+        )
+    print(f"[info] merged 30‑day stats ‑ new shape: {df.shape}")
+except Exception as e:
+    # keep pipeline running even if the view is missing
+    print("[warn] 30‑day stats merge skipped:", e)
 
-# In[3]:
+
+# In[14]:
 
 
 # 風向をラジアンに変換し、sin/cos 特徴量を生成
@@ -73,12 +101,21 @@ df["wind_dir_rad"] = np.deg2rad(df["wind_dir_deg"])
 df["wind_sin"] = np.sin(df["wind_dir_rad"])
 df["wind_cos"] = np.cos(df["wind_dir_rad"])
 
-NUM_COLS = ["air_temp", "wind_speed", "wave_height", "water_temp", "wind_sin", "wind_cos"]
+
+# numeric columns for StandardScaler
+BASE_NUM_COLS = ["air_temp", "wind_speed", "wave_height",
+                 "water_temp", "wind_sin", "wind_cos"]
+# automatically pick up newly merged rolling features (suffix *_30d)
+HIST_NUM_COLS = [c for c in df.columns
+                 if c.endswith("_30d") and df[c].dtype != "object"]
+NUM_COLS = BASE_NUM_COLS + HIST_NUM_COLS
+print(f"[info] StandardScaler will use {len(NUM_COLS)} numeric cols "
+      f"({len(BASE_NUM_COLS)} base + {len(HIST_NUM_COLS)} hist)")
 scaler = StandardScaler().fit(df[NUM_COLS])
 df[NUM_COLS] = scaler.transform(df[NUM_COLS])
 
 bool_cols = [c for c in df.columns if c.endswith("_fs_flag")]
-df[bool_cols] = df[bool_cols].fillna(False)
+df[bool_cols] = df[bool_cols].fillna(False).astype(bool)
 
 rank_cols = [f"lane{l}_rank" for l in range(1, 7)]
 df[rank_cols] = df[rank_cols].fillna(7).astype("int32")
@@ -100,7 +137,7 @@ scaler_filename = "artifacts/wind_scaler.pkl"
 joblib.dump(scaler, scaler_filename)
 
 
-# In[4]:
+# In[15]:
 
 
 def encode(col):
@@ -112,7 +149,7 @@ venue2id = encode("venue")
 # race_type2id = encode("race_type")
 
 
-# In[5]:
+# In[16]:
 
 
 # ============================================================
@@ -184,7 +221,7 @@ class SimpleCPLNet(nn.Module):
         return score.squeeze(-1)           # (B,6)
 
 
-# In[6]:
+# In[17]:
 
 
 def pl_nll(scores: torch.Tensor, ranks: torch.Tensor) -> torch.Tensor:
@@ -214,7 +251,7 @@ ranks  = torch.tensor([[1, 2, 3, 4, 5, 6]], dtype=torch.int64)    # lane0 が 1 
 print("pl_nll should be ~0 :", pl_nll(scores, ranks).item())
 
 
-# In[7]:
+# In[18]:
 
 
 df["race_date"] = pd.to_datetime(df["race_date"]).dt.date
@@ -377,7 +414,23 @@ for k, v in sorted(importance_scores.items(), key=lambda x: -x[1]):
 
 
 
-# In[8]:
+# In[19]:
+
+
+# ---- ROI evaluation on feat.eval_features --------------------------
+df_eval = pd.read_sql("SELECT * FROM feat.eval_features", conn)
+display(df_eval.head())
+
+
+# In[20]:
+
+
+df_eval = pd.read_sql("SELECT * FROM feat.eval_features WHERE race_date >= '2025-01-01'", conn)
+display(df_eval.head())
+df_eval.to_csv("artifacts/eval_features.csv", index=False)
+
+
+# In[21]:
 
 
 def preprocess_df(df: pd.DataFrame) -> pd.DataFrame:
@@ -407,20 +460,20 @@ def preprocess_df(df: pd.DataFrame) -> pd.DataFrame:
 
     # --- fill boolean & rank columns ---
     bool_cols = [c for c in df.columns if c.endswith("_fs_flag")]
-    df[bool_cols] = df[bool_cols].fillna(False)
+    df[bool_cols] = df[bool_cols].fillna(False).astype(bool)
 
     rank_cols = [f"lane{l}_rank" for l in range(1, 7)]
     df[rank_cols] = df[rank_cols].fillna(7).astype("int32")
 
     return df
 
-def evaluate_roi(model, processed_df, device="cpu", mode="zscore", batch_size=512):
+def evaluate_roi(model, df_eval, device="cpu", mode="zscore", batch_size=512):
     """
     Vectorized ROI & hit-rate for 3-連単。
     Returns (roi, hit_rate, returns_np) where returns_np は
     各レースの払戻額 (的中→odds, 不的中→0) の 1D ndarray
     """
-    df = processed_df
+    df = preprocess_df(df_eval)
 
     ds_eval = BoatRaceDataset(df, mode=mode)
     loader  = DataLoader(ds_eval, batch_size=batch_size, shuffle=False)
@@ -585,35 +638,37 @@ def evaluate_roi_with_conf(model, df_eval, device="cpu",mode="zscore", batch_siz
     else:
         return roi, hit_rate, returns
 
-# ---- ROI evaluation on feat.eval_features --------------------------
-df_eval = pd.read_sql("SELECT * FROM feat.eval_features", conn)
 
-processed_df = preprocess_df(df_eval)
 
-# モデル
-roi, hit_rate, ret = evaluate_roi(model, df_eval, device)
-stats = evaluate_roi_stats(ret)
+# # モデル
+# roi, hit_rate, ret = evaluate_roi(model, df_eval, device)
+# stats = evaluate_roi_stats(ret)
 
-# ベースライン
-roi_fixed, hit_fixed, ret_fixed = evaluate_roi_fixed(df_eval)
-stats_fixed = evaluate_roi_stats(ret_fixed)
+# # ベースライン
+# roi_fixed, hit_fixed, ret_fixed = evaluate_roi_fixed(df_eval)
+# stats_fixed = evaluate_roi_stats(ret_fixed)
 
-print("▼ モデル ROI            :",  f"{roi:.3f} (Hit {hit_rate:.3%})")
-print("  - 95%CI norm          :",  f"[{stats['ci95_norm'][0]:.3f}, {stats['ci95_norm'][1]:.3f}]")
-print("  - 95%CI boot          :",  f"[{stats['ci95_boot'][0]:.3f}, {stats['ci95_boot'][1]:.3f}]")
-print("  - σ / SE / Sharpe-like:",  f"{stats['std']:.3f} / {stats['se']:.4f} / {stats['sharpe_like']:.3f}")
+# print("▼ モデル ROI            :",  f"{roi:.3f} (Hit {hit_rate:.3%})")
+# print("  - 95%CI norm          :",  f"[{stats['ci95_norm'][0]:.3f}, {stats['ci95_norm'][1]:.3f}]")
+# print("  - 95%CI boot          :",  f"[{stats['ci95_boot'][0]:.3f}, {stats['ci95_boot'][1]:.3f}]")
+# print("  - σ / SE / Sharpe-like:",  f"{stats['std']:.3f} / {stats['se']:.4f} / {stats['sharpe_like']:.3f}")
 
-print("▼ 固定1-2-3 ROI         :",  f"{roi_fixed:.3f} (Hit {hit_fixed:.3%})")
-print("  - 95%CI norm          :",  f"[{stats_fixed['ci95_norm'][0]:.3f}, {stats_fixed['ci95_norm'][1]:.3f}]")
-print("   → ROI 差分           :",  f"{roi - roi_fixed:+.3f}")
+# print("▼ 固定1-2-3 ROI         :",  f"{roi_fixed:.3f} (Hit {hit_fixed:.3%})")
+# print("  - 95%CI norm          :",  f"[{stats_fixed['ci95_norm'][0]:.3f}, {stats_fixed['ci95_norm'][1]:.3f}]")
+# print("   → ROI 差分           :",  f"{roi - roi_fixed:+.3f}")
 
-# ---- ROI evaluation on feat.eval_features --------------------------
-# (2) 上位 20 % だけ賭ける
-sim20 = evaluate_roi_top_quantile(model, df_eval, device, quantile=0.01)
-print("\n▼ 上位20% ROI :", f"{sim20['roi']:.3f}  Hit {sim20['hit_rate']:.3%}"
-      f"  Coverage {sim20['coverage']:.1%}")
-print("  95%CI :", f"[{sim20['ci95_norm'][0]:.3f}, {sim20['ci95_norm'][1]:.3f}]  "
-      "(norm)")
+# # ---- ROI evaluation on feat.eval_features --------------------------
+# # (2) 上位 20 % だけ賭ける
+# sim20 = evaluate_roi_top_quantile(model, df_eval, device, quantile=0.01)
+# print("\n▼ 上位20% ROI :", f"{sim20['roi']:.3f}  Hit {sim20['hit_rate']:.3%}"
+#       f"  Coverage {sim20['coverage']:.1%}")
+# print("  95%CI :", f"[{sim20['ci95_norm'][0]:.3f}, {sim20['ci95_norm'][1]:.3f}]  "
+#       "(norm)")
+
+
+
+# In[22]:
+
 
 # ============================================================
 # ⑥ ── Market‑vs‑Model “edge” 計算ユーティリティ
@@ -714,6 +769,186 @@ def make_order_list(df_edge: pd.DataFrame,
     return orders.sort_values("edge", ascending=False)
 
 
+# ------------------------------------------------------------
+# ⑧b ── 資金曲線（Equity Curve）ユーティリティ
+#       edge ≥ τ & kelly>0 の戦略で累積損益を時系列で可視化
+# ------------------------------------------------------------
+def compute_equity_curve(df_met: pd.DataFrame,
+                         tau: float = 0.25,
+                         kelly_clip: float = 1.0,
+                         bet_mode: str = "kelly",   # "kelly" or "flat"
+                         flat_stake: float = 1.0,
+                         bet_unit: float = 100.0,
+                         sort_cols: tuple = ("race_date", "race_no")) -> pd.DataFrame:
+    """
+    Parameters
+    ----------
+    df_met : DataFrame from `compute_metrics_dataframe` (must contain hit, odds, edge, kelly)
+    tau    : edge threshold
+    kelly_clip : 上限ベット倍率 (units)
+    bet_mode   : "kelly" → stake = clip(kelly,0,kelly_clip)
+                 "flat"  → stake = flat_stake  (mask条件を満たす行のみ)
+    flat_stake : flatモード時の 1ベット単位
+    bet_unit   : 1ユニットあたりの金額（円）
+    sort_cols  : 時系列並び替えに使う列の候補（存在するものだけ使用）
+
+    Returns
+    -------
+    DataFrame with追加列:
+      bet_units, pnl, cum_pnl, cum_staked, cum_return, cum_roi
+      bet_amount, pnl_jpy, return_jpy, cum_pnl_jpy, cum_staked_jpy, cum_return_jpy, cum_roi_jpy
+    """
+    df = df_met.copy()
+
+    # -- ensure chronological order --
+    existing = [c for c in sort_cols if c in df.columns]
+    if existing:
+        df = df.sort_values(existing).reset_index(drop=True)
+
+    # -- betting mask --
+    mask = (df["edge"] >= tau) & (df["kelly"] > 0)
+
+    if bet_mode == "kelly":
+        stake = df["kelly"].clip(0, kelly_clip)
+    elif bet_mode == "flat":
+        stake = np.where(mask, flat_stake, 0.0)
+        stake = pd.Series(stake, index=df.index, dtype=float)
+    else:
+        raise ValueError(f"bet_mode must be 'kelly' or 'flat', got {bet_mode}")
+
+    df["bet_units"] = np.where(mask, stake, 0.0).astype(float)
+
+    # ----- real‑money (JPY) amounts -----
+    df["bet_amount"] = df["bet_units"] * bet_unit                     # 円
+    profit_if_hit_amt = df["bet_amount"] * (df["odds"] - 1.0)
+    df["pnl_jpy"] = np.where(df["hit"], profit_if_hit_amt, -df["bet_amount"])
+    df["return_jpy"] = np.where(df["hit"], df["bet_amount"] * df["odds"], 0.0)
+
+    # profit per bet: stake * ((odds - 1) if hit else -1)
+    profit_if_hit = (df["odds"] - 1.0)
+    df["pnl"] = df["bet_units"] * np.where(df["hit"], profit_if_hit, -1.0)
+
+    # actual returns incl. stake (bet_units*odds on hit, else 0)
+    df["return_units"] = df["bet_units"] * np.where(df["hit"], df["odds"], 0.0)
+    df["stake_units"]  = df["bet_units"]                               # 1 unit per stake
+
+    # cumulative in units
+    df["cum_pnl"]      = df["pnl"].cumsum()
+    df["cum_staked"]   = df["stake_units"].cumsum()
+    df["cum_return"]   = df["return_units"].cumsum()
+    df["cum_roi"]      = np.where(df["cum_staked"] > 0,
+                                  df["cum_return"] / df["cum_staked"],
+                                  np.nan)
+    # cumulative in yen
+    df["cum_pnl_jpy"]    = df["pnl_jpy"].cumsum()
+    df["cum_staked_jpy"] = df["bet_amount"].cumsum()
+    df["cum_return_jpy"] = df["return_jpy"].cumsum()
+    df["cum_roi_jpy"]    = np.where(df["cum_staked_jpy"] > 0,
+                                    df["cum_return_jpy"] / df["cum_staked_jpy"],
+                                    np.nan)
+    return df
+
+
+def plot_equity_curve(df_eq: pd.DataFrame,
+                      title: str = "Equity Curve",
+                      use_jpy: bool = False,
+                      group_by: str = "bets",   # "bets" or "races"
+                      figsize=(8, 4)):
+    """
+    Quick Matplotlib plot of cumulative PnL.
+
+    Parameters
+    ----------
+    df_eq : pd.DataFrame
+        Output of `compute_equity_curve`.
+    group_by : {"bets", "races"}
+        "bets"  – x‑axis equals individual bets (original behaviour).
+        "races" – aggregate PnL per race (race_date × race_no) first,
+                  so x‑axis equals number of races.
+    use_jpy : bool
+        Plot yen‑denominated PnL if True, otherwise unit PnL.
+    """
+    plt.figure(figsize=figsize)
+
+    if group_by == "races" and {"race_date", "race_no"}.issubset(df_eq.columns):
+        # Aggregate per race before cumulative sum
+        value_col = "pnl_jpy" if use_jpy else "pnl"
+        df_plot = (
+            df_eq.groupby(["race_date", "race_no"], as_index=False)[value_col]
+                 .sum()
+                 .sort_values(["race_date", "race_no"])
+        )
+        series = df_plot[value_col].cumsum().values
+        xlabel = "Races (chronological)"
+    else:
+        # Original per‑bet cumulative series
+        series = (df_eq["cum_pnl_jpy"] if use_jpy else df_eq["cum_pnl"]).values
+        xlabel = "Bets (chronological)"
+
+    plt.plot(series)
+    plt.axhline(0.0, linestyle="--")
+    plt.xlabel(xlabel)
+    ylabel = "Cumulative PnL (JPY)" if use_jpy else "Cumulative PnL (units)"
+    plt.ylabel(ylabel)
+    plt.title(title)
+    plt.grid(True)
+    plt.show()
+
+# ------------------------------------------------------------
+# ⑧c ── Risk Metrics & Diagnostics
+# ------------------------------------------------------------
+def compute_drawdown(df_eq: pd.DataFrame, use_jpy: bool = False) -> tuple:
+    """
+    Returns (max_drawdown, max_drawdown_pct)
+    """
+    equity = df_eq["cum_pnl_jpy"] if use_jpy else df_eq["cum_pnl"]
+    peak = equity.expanding().max()
+    drawdown = equity - peak
+    max_dd = drawdown.min()
+    max_dd_pct = (max_dd / peak.where(drawdown == max_dd).iloc[0]) if len(equity) else np.nan
+    return max_dd, max_dd_pct
+
+
+def longest_flat_period(df_eq: pd.DataFrame, use_jpy: bool = False) -> int:
+    """
+    Returns the length (number of bets) of the longest period where equity
+    failed to make a new high. (i.e., consecutive drawdown length)
+    """
+    equity = df_eq["cum_pnl_jpy"] if use_jpy else df_eq["cum_pnl"]
+    peak = equity.expanding().max()
+    is_dd = equity < peak
+    # count consecutive True segments
+    counts = (is_dd != is_dd.shift()).cumsum()
+    run_lengths = is_dd.groupby(counts).sum()
+    return int(run_lengths.max())
+
+
+def pnl_heatmap(df_met: pd.DataFrame,
+                value: str = "pnl_jpy",
+                figsize=(10,6),
+                bet_unit: float = 100.0):
+    """
+    Displays a year x venue heatmap of cumulative PnL (JPY).
+    """
+    if "venue" not in df_met.columns or "race_date" not in df_met.columns:
+        print("[heatmap] required columns 'venue' and 'race_date' not found.")
+        return
+
+    tmp = df_met.copy()
+    tmp["year"] = pd.to_datetime(tmp["race_date"]).dt.year
+    tmp["venue"] = tmp.get("venue")  # venue name or id
+    pivot = tmp.pivot_table(index="year", columns="venue", values=value, aggfunc="sum").fillna(0)
+
+    plt.figure(figsize=figsize)
+    im = plt.imshow(pivot.values, aspect="auto", cmap="RdYlGn")
+    plt.colorbar(im, label=f"PnL ({value})")
+    plt.xticks(ticks=np.arange(len(pivot.columns)), labels=pivot.columns, rotation=90)
+    plt.yticks(ticks=np.arange(len(pivot.index)),  labels=pivot.index)
+    plt.title("Year-Venue PnL Heatmap")
+    plt.tight_layout()
+    plt.show()
+
+
 
 # ------------------------------------------------------------
 # ⑨ ── SINGLE‑PASS Metrics computation
@@ -777,7 +1012,7 @@ def compute_metrics_dataframe(model,
     returns  = np.where(hit_mask, df["odds"].values, 0.0)
 
     # ---------- assemble ----------
-    df_met = df[["first_lane", "second_lane", "third_lane", "odds"]].copy()
+    df_met = df[["race_key", "first_lane", "second_lane", "third_lane", "odds"]].copy()
     df_met[["pred1","pred2","pred3"]] = preds
     df_met["conf"]    = confs
     df_met["p_model"] = p_model_list
@@ -816,7 +1051,7 @@ print("edge > 0 ratio :", (df_edge["edge"] > 0).mean())
 print(df_edge.sort_values("edge", ascending=False).head())
 
 # --- Build order list ---
-tau = 0.25
+tau = 0.6
 order_df = make_order_list(df_edge, tau)
 print(f"\n発注リスト (edge ≥ {tau:.2f} & kelly>0): {len(order_df)} 件")
 print(order_df[["first_lane","second_lane","third_lane","odds","edge","kelly","bet_units"]]
@@ -830,8 +1065,25 @@ print(f"\n▼ edge≥{tau:.2f} & kelly>0 ROI : {sim_edge['roi']:.3f}"
         f"  Coverage {sim_edge['coverage']:.1%}")
 print("  95%CI norm :", f"[{sim_edge['ci95_norm'][0]:.3f}, {sim_edge['ci95_norm'][1]:.3f}]")
 
+# --- Build metrics DF once & plot equity curve ----------------------
+df_met = compute_metrics_dataframe(model, df_eval, device=device, batch_size=512)
+df_eq  = compute_equity_curve(df_met, tau=tau, kelly_clip=1.0, bet_mode="kelly")
+print(f"\n[Equity] 最終累積損益: {df_eq['cum_pnl_jpy'].iloc[-1]:,.0f} 円  "
+      f"累積投下資金: {df_eq['cum_staked_jpy'].iloc[-1]:,.0f} 円  "
+      f"累積ROI: {df_eq['cum_roi_jpy'].iloc[-1]:.3f}")
+plot_equity_curve(df_eq, title=f'Equity Curve τ={tau:.2f} (kelly)', use_jpy=True)
 
-# In[ ]:
+# --- Risk diagnostics ------------------------------------------------
+max_dd, max_dd_pct = compute_drawdown(df_eq, use_jpy=True)
+flat_len = longest_flat_period(df_eq, use_jpy=True)
+print(f"最大ドローダウン: {max_dd:,.0f} 円 ({max_dd_pct:.2%})")
+print(f"最長横ばい期間: {flat_len} bets")
+
+# --- Year-Venue heatmap ---------------------------------------------
+pnl_heatmap(df_met.assign(pnl_jpy=df_eq['pnl_jpy']), value="pnl_jpy")
+
+
+# In[23]:
 
 
 # ============================================================
@@ -888,7 +1140,7 @@ overfit_tiny(df, device)
 # ============================================================
 
 
-# In[ ]:
+# In[24]:
 
 
 torch.save({
@@ -899,22 +1151,23 @@ torch.save({
 }, "cplnet_checkpoint.pt")
 
 
-# In[ ]:
+# In[25]:
 
 
-# .ipynbを.pyに変換しておく
-if __name__ == "__main__":
-    import nbformat
-    from nbconvert import PythonExporter
+import nbformat
+from nbconvert import PythonExporter
 
-    with open("main.ipynb", "r", encoding="utf-8") as f:
-        nb = nbformat.read(f, as_version=4)
+with open("main.ipynb", "r", encoding="utf-8") as f:
+    nb = nbformat.read(f, as_version=4)
 
-    exporter = PythonExporter()
-    source, _ = exporter.from_notebook_node(nb)
+exporter = PythonExporter()
+source, _ = exporter.from_notebook_node(nb)
 
-    with open("main.py", "w", encoding="utf-8") as f:
-        f.write(source)
+with open("main.py", "w", encoding="utf-8") as f:
+    f.write(source)
+
+
+# In[26]:
 
 
 # ============================================================
@@ -1035,7 +1288,62 @@ def predict_latest_3months():
     evaluate_against_fixed_ranks(pred_loader)
 
 # 呼び出し例
-if __name__ == "__main__":
-    plot_learning_curve(df, device)
-    predict_latest_3months()
+
+# plot_learning_curve(df, device)
+# predict_latest_3months()
+
+# ============================================================
+# ★ 直近3ヶ月データで実ベットシミュレーション ★
+# ============================================================
+def simulate_last_3months(tau: float = 0.60,
+                          kelly_clip: float = 1.0,
+                          bet_unit: float = 100.0,
+                          device: str = "cpu"):
+    """
+    Fetch last 90‑day races, compute edge & Kelly strategy,
+    and output ROI / PnL statistics + equity curve.
+    """
+    today = dt.date.today()
+    start_date = today - dt.timedelta(days=4)
+
+    query = f"""
+        SELECT * FROM feat.eval_features
+        WHERE race_date BETWEEN '{start_date}' AND '{today}'
+    """
+    df_recent = pd.read_sql(query, conn)
+    if df_recent.empty:
+        print("[simulate] No rows fetched for last 3 months.")
+        return
+
+    print(f"[simulate] Loaded {len(df_recent)} rows ({start_date} – {today}).")
+
+    # ----- metrics & equity -----
+    df_met = compute_metrics_dataframe(model, df_recent,
+                                       device=device, batch_size=512)
+    df_eq  = compute_equity_curve(df_met, tau=tau, kelly_clip=kelly_clip,
+                                  bet_unit=bet_unit, bet_mode="kelly")
+    
+    df_met.to_csv("metrics_last_3months.csv", index=False)
+    df_eq.to_csv("equity_curve_last_3months.csv", index=False)
+    df_eq[df_eq["bet_units"] > 0][["race_key", "first_lane", "second_lane", "third_lane", "odds", "bet_units"]].to_csv("bet_orders_last_3months.csv", index=False)
+    df_eq[(df_eq["bet_units"] > 0) & (df_eq["hit"] == True)][
+        ["race_key", "first_lane", "second_lane", "third_lane", "odds", "bet_units", "pnl_jpy"]
+    ].to_csv("hit_bets_last_3months.csv", index=False)
+    print(f"[simulate] ROI (edge≥{tau:.2f}): {df_eq['cum_roi_jpy'].iloc[-1]:.3f} "
+          f" | Profit: {df_eq['cum_pnl_jpy'].iloc[-1]:,.0f}円 "
+          f"| Stake: {df_eq['cum_staked_jpy'].iloc[-1]:,.0f}円 "
+          f"| Bets: {len(df_eq)}")
+
+    max_dd, _ = compute_drawdown(df_eq, use_jpy=True)
+    flat_len = longest_flat_period(df_eq, use_jpy=True)
+    print(f"[simulate] Max DD: {max_dd:,.0f}円 | Longest flat: {flat_len} bets")
+
+    plot_equity_curve(df_eq,
+                      title=f'Equity (last 3M, τ={tau})',
+                      use_jpy=True,
+                      group_by="races")
+    pnl_heatmap(df_met.assign(pnl_jpy=df_eq["pnl_jpy"]), value="pnl_jpy")
+
+# Optional direct run
+simulate_last_3months(tau=0.60, kelly_clip=1.0, device=device)
 

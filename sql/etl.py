@@ -312,6 +312,297 @@ def load_odds3t(engine, path: str) -> None:
     )
 
 # ---------------------------------------------------------------------------
+# 3.7  Racer statistics CSV loaders → raw.*_staging
+# ---------------------------------------------------------------------------
+
+def _load_racertech(engine, path: str) -> None:
+    df = pd.read_csv(path)
+    rename_map = {
+        "reg_no": ["regno", "登録番号", "reg_no"],
+        "course_label": ["コース", "course_label"],
+        "starts": ["出走数", "出走回数", "starts"],
+        "firsts": ["1着数", "１着数", "firsts"],
+        "nige": ["逃げ", "nige"],
+        "sashi": ["差し", "sashi"],
+        "makuri": ["まくり", "makuri"],
+        "makurisashi": ["まくり差し", "makuri差し", "makurisashi"],
+        "nuki": ["抜き", "nuki"],
+        "megumare": ["恵まれ", "megumれ", "megumare"],
+    }
+    for std, vs in rename_map.items():
+        for v in vs:
+            if v in df.columns and std not in df.columns:
+                df = df.rename(columns={v: std})
+                break
+    numeric_cols = [
+        "reg_no", "starts", "firsts", "nige", "sashi", "makuri",
+        "makurisashi", "nuki", "megumare"
+    ]
+    df[numeric_cols] = df[numeric_cols].apply(pd.to_numeric, errors="coerce")
+    if "source_file" not in df.columns:
+        df["source_file"] = str(Path(path))
+    df.to_sql(
+        "racertech_staging",
+        con=engine,
+        schema="raw",
+        if_exists="append",
+        index=False,
+        method="multi",
+    )
+
+def _load_racerstadium(engine, path: str) -> None:
+    df = pd.read_csv(path)
+    rename_map = {
+        "reg_no": ["regno", "登録番号"],
+        "stadium_label": ["場", "stadium_label"],
+        "meeting_entries": ["出場節数", "meeting_entries"],
+        "starts": ["出走数", "starts"],
+        "firsts": ["1着数", "１着数"],
+        "winrate": ["勝率", "winrate"],
+        "first_rate": ["1着率", "１着率"],
+        "two_rate": ["2連対率", "２連対率"],
+        "three_rate": ["3連対率", "３連対率"],
+        "finalist_cnt": ["優出", "優出回数"],
+        "champion_cnt": ["優勝", "優勝回数"],
+        "avg_st": ["平均ST", "avg_st"],
+    }
+    for std, vs in rename_map.items():
+        for v in vs:
+            if v in df.columns and std not in df.columns:
+                df = df.rename(columns={v: std})
+                break
+    float_cols = ["winrate", "first_rate", "two_rate", "three_rate", "avg_st"]
+    int_cols = [
+        "reg_no", "meeting_entries", "starts", "firsts",
+        "finalist_cnt", "champion_cnt"
+    ]
+    df[float_cols] = df[float_cols].apply(pd.to_numeric, errors="coerce")
+    df[int_cols] = df[int_cols].apply(pd.to_numeric, errors="coerce")
+    if "source_file" not in df.columns:
+        df["source_file"] = str(Path(path))
+    df.to_sql(
+        "racerstadium_staging",
+        con=engine,
+        schema="raw",
+        if_exists="append",
+        index=False,
+        method="multi",
+    )
+
+def _load_racerresult1(engine, path: str) -> None:
+    df = pd.read_csv(path)
+    rename_map = {
+        "reg_no": ["regno", "登録番号"],
+        "grade": ["グレード", "grade"],
+        "meeting_entries": ["出場節数", "meeting_entries"],
+        "starts": ["出走数", "starts"],
+        "firsts": ["1着数", "１着数"],
+        "winrate": ["勝率", "winrate"],
+        "first_rate": ["1着率", "１着率"],
+        "two_rate": ["2連対率", "２連対率"],
+        "three_rate": ["3連対率", "３連対率"],
+        "finalist_cnt": ["優出", "優出回数"],
+        "champion_cnt": ["優勝", "優勝回数"],
+        "avg_st": ["平均ST", "avg_st"],
+        "avg_st_rank": ["平均ST順", "avg_st_rank"],
+    }
+    for std, vs in rename_map.items():
+        for v in vs:
+            if v in df.columns and std not in df.columns:
+                df = df.rename(columns={v: std})
+                break
+    float_cols = ["winrate", "first_rate", "two_rate", "three_rate", "avg_st", "avg_st_rank"]
+    int_cols = [
+        "reg_no", "meeting_entries", "starts", "firsts",
+        "finalist_cnt", "champion_cnt"
+    ]
+    df[float_cols] = df[float_cols].apply(pd.to_numeric, errors="coerce")
+    df[int_cols] = df[int_cols].apply(pd.to_numeric, errors="coerce")
+    if "source_file" not in df.columns:
+        df["source_file"] = str(Path(path))
+    df.to_sql(
+        "racerresult1_staging",
+        con=engine,
+        schema="raw",
+        if_exists="append",
+        index=False,
+        method="multi",
+    )
+
+def _load_racerresult2(engine, path: str) -> None:
+    df = pd.read_csv(path)
+    rename_map = {
+        "reg_no": ["regno", "登録番号"],
+        "grade": ["グレード", "grade"],
+        "starts": ["出走数", "starts"],
+        "firsts": ["1着", "１着", "firsts"],
+        "seconds": ["2着", "２着", "seconds"],
+        "thirds": ["3着", "３着", "thirds"],
+        "fourths": ["4着", "４着", "fourths"],
+        "fifths": ["5着", "５着", "fifths"],
+        "sixths": ["6着", "６着", "sixths"],
+        "s0": ["S0", "s0"],
+        "s1": ["S1", "s1"],
+        "s2": ["S2", "s2"],
+        "f_cnt": ["F", "f_cnt"],
+        "l0": ["L0", "l0"],
+        "l1": ["L1", "l1"],
+        "k0": ["K0", "k0"],
+        "k1": ["K1", "k1"],
+    }
+    for std, vs in rename_map.items():
+        for v in vs:
+            if v in df.columns and std not in df.columns:
+                df = df.rename(columns={v: std})
+                break
+    int_cols = [
+        "reg_no", "starts", "firsts", "seconds", "thirds", "fourths",
+        "fifths", "sixths", "s0", "s1", "s2", "f_cnt", "l0", "l1", "k0", "k1"
+    ]
+    df[int_cols] = df[int_cols].apply(pd.to_numeric, errors="coerce")
+    if "source_file" not in df.columns:
+        df["source_file"] = str(Path(path))
+    df.to_sql(
+        "racerresult2_staging",
+        con=engine,
+        schema="raw",
+        if_exists="append",
+        index=False,
+        method="multi",
+    )
+
+def _load_racercourse(engine, path: str) -> None:
+    df = pd.read_csv(path)
+    rename_map = {
+        "reg_no": ["regno", "登録番号", "reg_no"],
+        "course_label": ["コース", "course_label"],
+        "starts": ["出走数", "starts"],
+        "firsts": ["1着数", "１着数", "firsts"],
+        "first_rate": ["1着率", "１着率", "first_rate"],
+        "two_rate": ["2連対率", "２連対率", "two_rate"],
+        "three_rate": ["3連対率", "３連対率", "three_rate"],
+        "avg_st": ["平均ST", "avg_st"],
+        "avg_st_rank": ["平均ST順", "avg_st_rank"],
+    }
+    for std, vs in rename_map.items():
+        for v in vs:
+            if v in df.columns and std not in df.columns:
+                df = df.rename(columns={v: std})
+                break
+    float_cols = ["first_rate", "two_rate", "three_rate", "avg_st", "avg_st_rank"]
+    int_cols = ["reg_no", "starts", "firsts"]
+    df[float_cols] = df[float_cols].apply(pd.to_numeric, errors="coerce")
+    df[int_cols] = df[int_cols].apply(pd.to_numeric, errors="coerce")
+    if "source_file" not in df.columns:
+        df["source_file"] = str(Path(path))
+    df.to_sql(
+        "racercourse_staging",
+        con=engine,
+        schema="raw",
+        if_exists="append",
+        index=False,
+        method="multi",
+    )
+
+def _load_racerboatcourse(engine, path: str) -> None:
+    df = pd.read_csv(path)
+    rename_map = {
+        "reg_no": ["regno", "登録番号"],
+        "boat_no_label": ["艇番", "boat_no", "boat_no_label"],
+        "starts": ["出走数", "starts"],
+        "lane1_cnt": ["1 コース", "1コース", "lane1_cnt"],
+        "lane2_cnt": ["2 コース", "2コース", "lane2_cnt"],
+        "lane3_cnt": ["3 コース", "3コース", "lane3_cnt"],
+        "lane4_cnt": ["4 コース", "4コース", "lane4_cnt"],
+        "lane5_cnt": ["5 コース", "5コース", "lane5_cnt"],
+        "lane6_cnt": ["6 コース", "6コース", "lane6_cnt"],
+        "other_cnt": ["その他", "other_cnt"],
+    }
+    for std, vs in rename_map.items():
+        for v in vs:
+            if v in df.columns and std not in df.columns:
+                df = df.rename(columns={v: std})
+                break
+    int_cols = [
+        "reg_no", "starts", "lane1_cnt", "lane2_cnt", "lane3_cnt",
+        "lane4_cnt", "lane5_cnt", "lane6_cnt", "other_cnt"
+    ]
+    df[int_cols] = df[int_cols].apply(pd.to_numeric, errors="coerce")
+    if "source_file" not in df.columns:
+        df["source_file"] = str(Path(path))
+    df.to_sql(
+        "racerboatcourse_staging",
+        con=engine,
+        schema="raw",
+        if_exists="append",
+        index=False,
+        method="multi",
+    )
+
+def _load_racerboat(engine, path: str) -> None:
+    df = pd.read_csv(path)
+
+    # 1) Normalize column names
+    rename_map = {
+        "reg_no": ["regno", "登録番号"],
+        "boat_no_label": ["艇番", "boat_no", "boat_no_label"],
+        "starts": ["出走数", "starts"],
+        "firsts": ["1着数", "１着数", "firsts"],
+        "first_rate": ["1着率", "１着率", "first_rate"],
+        "two_rate": ["2連対率", "２連対率", "two_rate"],
+        "three_rate": ["3連対率", "３連対率", "three_rate"],
+        "finalist_cnt": ["優出", "優出回数", "finalist_cnt"],
+        "champion_cnt": ["優勝", "優勝回数", "champion_cnt"],
+    }
+    for std, variants in rename_map.items():
+        for v in variants:
+            if v in df.columns and std not in df.columns:
+                df = df.rename(columns={v: std})
+                break
+
+    # 2) Ensure required columns exist, create missing ones with NA
+    float_cols = ["first_rate", "two_rate", "three_rate"]
+    int_cols = ["reg_no", "starts", "firsts", "finalist_cnt", "champion_cnt"]
+    required_cols = (
+        ["name", "boat_no_label"] + float_cols + int_cols + ["source_file"]
+    )
+    for col in required_cols:
+        if col not in df.columns:
+            df[col] = pd.NA
+
+    # 3) Type coercion
+    df[float_cols] = df[float_cols].apply(pd.to_numeric, errors="coerce")
+    df[int_cols] = df[int_cols].apply(pd.to_numeric, errors="coerce")
+
+    # 4) Keep only the columns that exist in raw.racerboat_staging
+    allowed_cols = [
+        "reg_no",
+        "name",
+        "boat_no_label",
+        "starts",
+        "firsts",
+        "first_rate",
+        "two_rate",
+        "three_rate",
+        "finalist_cnt",
+        "champion_cnt",
+        "source_file",
+    ]
+    df = df[[col for col in allowed_cols if col in df.columns]]
+
+    # 5) source_file default
+    if df["source_file"].isna().all():
+        df["source_file"] = str(Path(path))
+    df.to_sql(
+        "racerboat_staging",
+        con=engine,
+        schema="raw",
+        if_exists="append",
+        index=False,
+        method="multi",
+    )
+
+# ---------------------------------------------------------------------------
 # 4. ローダ設定
 # ---------------------------------------------------------------------------
 
@@ -321,6 +612,13 @@ _LOADERS = {
     "results": ("*_results.csv", _load_results),
     "beforeinfo": ("*_beforeinfo.csv", _load_beforeinfo),
     "weather": ("*_weather.csv", _load_weather),
+    "racertech": ("*_tRacerTech*.csv", _load_racertech),
+    "racerstadium": ("*_tRacerStadium*.csv", _load_racerstadium),
+    "racerresult1": ("*_tRacerResult1*.csv", _load_racerresult1),
+    "racerresult2": ("*_tRacerResult2*.csv", _load_racerresult2),
+    "racercourse": ("*_tRacerCourse*.csv", _load_racercourse),
+    "racerboatcourse": ("*_tRacerBoatCourse*.csv", _load_racerboatcourse),
+    "racerboat": ("*_tRacerBoat*.csv", _load_racerboat),
 }
 
 # ---------------------------------------------------------------------------
@@ -333,10 +631,20 @@ def main() -> None:
     
     csv_root = {
         "results": Path(os.getenv("CSV_DIR_RESULTS", "download/wakamatsu_off_raceresult_csv")),
+        "results_2": Path(os.getenv("CSV_DIR_RESULTS", "download/wakamatsu_off_raceresult_csv_2223")),
         "beforeinfo": Path(os.getenv("CSV_DIR_BEFOREINFO", "download/wakamatsu_off_beforeinfo_csv")),
+        "beforeinfo_2": Path(os.getenv("CSV_DIR_BEFOREINFO", "download/wakamatsu_off_beforeinfo_csv_2223")),
         "weather": Path(os.getenv("CSV_DIR_BEFOREINFO", "download/wakamatsu_off_beforeinfo_csv")),
+        "weather_2": Path(os.getenv("CSV_DIR_BEFOREINFO", "download/wakamatsu_off_beforeinfo_csv_2223")),
         "person": Path(os.getenv("CSV_DIR_PERSON", "download/wakamatsu_person_csv")),
         "odds3t": Path(os.getenv("CSV_DIR_ODDS", "download/wakamatsu_off_odds3t_csv")),
+        "racerboat": Path(os.getenv("CSV_DIR_RACERBOAT", "download/person_record_csv")),
+        "racertech": Path(os.getenv("CSV_DIR_RACERTECH", "download/person_record_csv")),
+        "racerstadium": Path(os.getenv("CSV_DIR_RACERSTADIUM", "download/person_record_csv")),
+        "racerresult1": Path(os.getenv("CSV_DIR_RACERRESULT1", "download/person_record_csv")),
+        "racerresult2": Path(os.getenv("CSV_DIR_RACERRESULT2", "download/person_record_csv")),
+        "racercourse": Path(os.getenv("CSV_DIR_RACERCOURSE", "download/person_record_csv")),
+        "racerboatcourse": Path(os.getenv("CSV_DIR_RACERBOATCOURSE", "download/person_record_csv")),
     }
 
     user = os.getenv("PGUSER", "keiichiro")
@@ -347,8 +655,15 @@ def main() -> None:
     dsn = f"postgresql://{user}@{host}:{port}/{database}"
     engine = create_engine(dsn)
 
-    for kind, (pattern, loader) in _LOADERS.items():
-        path = csv_root[kind]
+    for kind, path in csv_root.items():
+        base_kind = kind.removesuffix("_2")  # 結果: "results2"  (末尾が "_2" ではないので変化なし)
+        print(base_kind)
+        if base_kind not in _LOADERS:
+            print(f"⚠ no loader for {base_kind}")
+            continue
+
+        pattern, loader = _LOADERS[base_kind]
+
         if not path.is_dir():
             print(f"❌ {path} not found", file=sys.stderr)
             continue

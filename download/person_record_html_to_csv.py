@@ -107,9 +107,9 @@ def html_tables_to_csv(html_path: Path, out_dir: Path) -> None:
 
 if __name__ == "__main__":
     import os
-    dir_path = os.listdir("download/person_html")
+    dir_path = os.listdir("download/person_record_html")
 
     for html_file in dir_path:
-        os.makedirs("download/person_csv", exist_ok=True)
-        html_tables_to_csv(Path("download/person_html") / html_file, Path("download/person_csv"))
+        os.makedirs("download/person_record_csv", exist_ok=True)
+        html_tables_to_csv(Path("download/person_record_html") / html_file, Path("download/person_record_csv"))
     print("All tables extracted.")

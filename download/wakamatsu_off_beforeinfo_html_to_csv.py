@@ -162,7 +162,7 @@ def parse_boat_race_html(html_path: str, encoding: str = "utf-8") -> None:
     # 6) CSV 出力
     # ------------------------------------------------------------------
     basename = html_path.stem
-    csv_dir = "download/wakamatsu_off_beforeinfo_csv"
+    csv_dir = "download/wakamatsu_off_beforeinfo_csv_2223"
     Path(csv_dir).mkdir(exist_ok=True)
     meta_df.to_csv(f"{csv_dir}/{basename}_meta.csv", index=False, encoding=encoding)
     # closing_df.to_csv(f"{csv_dir}/{basename}_closing_times.csv", index=False, encoding=encoding)
@@ -175,6 +175,7 @@ def parse_boat_race_html(html_path: str, encoding: str = "utf-8") -> None:
 if __name__ == "__main__":
     import os
     # htmlのファイルを取得
-    htmls = os.listdir("download/wakamatsu_off_beforeinfo_html")
+    dir_name = "download/wakamatsu_off_beforeinfo_html_2223"
+    htmls = os.listdir(dir_name)
     for html in htmls:
-        parse_boat_race_html(f"download/wakamatsu_off_beforeinfo_html/{html}", encoding="utf-8")
+        parse_boat_race_html(f"{dir_name}/{html}", encoding="utf-8")

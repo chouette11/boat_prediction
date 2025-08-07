@@ -139,14 +139,16 @@ def parse_weather(soup: BeautifulSoup) -> dict[str, str]:
 
 def main() -> None:
     import os
-    htmls = os.listdir("download/wakamatsu_off_raceresult_html")
-    csv_dir = Path("download/wakamatsu_off_raceresult_csv")
+    dir_name = "download/wakamatsu_off_raceresult_html_2223"
+    csv_dir_name = "download/wakamatsu_off_raceresult_csv_2223"
+    htmls = os.listdir(dir_name)
+    csv_dir = Path(csv_dir_name)
     csv_dir.mkdir(parents=True, exist_ok=True)
     for html in htmls:
         if not html.endswith(".html"):  
             print(f"Skipping non-HTML file: {html}")
             continue
-        input_html = Path(f"download/wakamatsu_off_raceresult_html/{html}")
+        input_html = Path(f"{dir_name}/{html}")
         print(f"Processing {input_html}...")
 
         soup = BeautifulSoup(input_html.read_text(encoding="utf-8", errors="ignore"), "html.parser")

@@ -162,6 +162,106 @@ ORDER BY race_key,
          third_lane,
          source_file DESC;
 
+-- レーサー統計（コース別：走法＋率 を統合） -------------------
+CREATE MATERIALIZED VIEW IF NOT EXISTS core.racerstats_course AS
+SELECT
+       COALESCE(rt.reg_no, rc.reg_no)       AS reg_no,
+       COALESCE(rt.course, rc.course)       AS course,
+       COALESCE(rt.starts, rc.starts)       AS starts,
+       COALESCE(rt.firsts, rc.firsts)       AS firsts,
+       rt.nige,
+       rt.sashi,
+       rt.makuri,
+       rt.makurisashi,
+       rt.nuki,
+       rt.megumare,
+       rc.first_rate,
+       rc.two_rate,
+       rc.three_rate,
+       rc.avg_st,
+       rc.avg_st_rank
+FROM raw.racertech   rt
+FULL JOIN raw.racercourse rc
+  ON rt.reg_no = rc.reg_no
+ AND rt.course = rc.course;
+
+-- レーサー成績（グレード別：率＋着順分布 を統合） --------------
+CREATE MATERIALIZED VIEW IF NOT EXISTS core.racerstats_grade AS
+SELECT
+       rr1.reg_no,
+       rr1.grade,
+       rr1.meeting_entries,
+       COALESCE(rr1.starts, rr2.starts) AS starts,
+       COALESCE(rr1.firsts, rr2.firsts) AS firsts,
+       rr2.seconds,
+       rr2.thirds,
+       rr2.fourths,
+       rr2.fifths,
+       rr2.sixths,
+       rr1.winrate,
+       rr1.first_rate,
+       rr1.two_rate,
+       rr1.three_rate,
+       rr1.finalist_cnt,
+       rr1.champion_cnt,
+       rr1.avg_st,
+       rr1.avg_st_rank,
+       rr2.s0,
+       rr2.s1,
+       rr2.s2,
+       rr2.f_cnt,
+       rr2.l0,
+       rr2.l1,
+       rr2.k0,
+       rr2.k1
+FROM raw.racerresult1 rr1
+LEFT JOIN raw.racerresult2 rr2
+  ON rr1.reg_no = rr2.reg_no
+ AND rr1.grade  = rr2.grade;
+
+-- レーサー統計（ボート＋レーン別：分布＋率 を統合） ------------
+CREATE MATERIALIZED VIEW IF NOT EXISTS core.racerstats_boatcourse AS
+SELECT
+       COALESCE(rbc.reg_no, rb.reg_no)           AS reg_no,
+       COALESCE(rbc.lane, rb.lane)               AS lane,
+       COALESCE(rbc.starts, rb.starts)           AS starts,
+       rbc.lane1_cnt,
+       rbc.lane2_cnt,
+       rbc.lane3_cnt,
+       rbc.lane4_cnt,
+       rbc.lane5_cnt,
+       rbc.lane6_cnt,
+       rbc.other_cnt,
+       rb.firsts,
+       rb.first_rate,
+       rb.two_rate,
+       rb.three_rate,
+       rb.finalist_cnt,
+       rb.champion_cnt
+FROM raw.racerboatcourse rbc
+FULL JOIN raw.racerboat      rb
+  ON rbc.reg_no        = rb.reg_no
+ AND rbc.lane = rb.lane;
+
+-- レーサー統計（スタジアム） -------------------
+
+-- レーサー統計（スタジアム別） ------------------------------
+CREATE MATERIALIZED VIEW IF NOT EXISTS core.racerstats_stadium AS
+SELECT
+       reg_no,
+       CASE WHEN stadium_code ~ '^\d+$' THEN stadium_code::INT ELSE NULL END AS stadium,
+       meeting_entries,
+       starts,
+       firsts,
+       winrate,
+       first_rate,
+       two_rate,
+       three_rate,
+       finalist_cnt,
+       champion_cnt,
+       avg_st
+FROM raw.racerstadium;
+
 -- ==========================================================
 -- REFRESH MATERIALIZED VIEWS
 -- ==========================================================
@@ -170,6 +270,11 @@ REFRESH MATERIALIZED VIEW core.races;
 REFRESH MATERIALIZED VIEW core.results;
 REFRESH MATERIALIZED VIEW core.weather;
 REFRESH MATERIALIZED VIEW core.odds3t;
+
+REFRESH MATERIALIZED VIEW core.racerstats_course;
+REFRESH MATERIALIZED VIEW core.racerstats_grade;
+REFRESH MATERIALIZED VIEW core.racerstats_boatcourse;
+REFRESH MATERIALIZED VIEW core.racerstats_stadium;
 
 -- ==========================================================
 -- データ存在チェック（core.* のマテビューすべて）

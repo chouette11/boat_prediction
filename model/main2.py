@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[16]:
+# In[12]:
 
 
 import torch
@@ -99,7 +99,7 @@ register_feature(FeatureDef("wind_sin", _wind_sin, deps=["wind_dir_deg"]))
 register_feature(FeatureDef("wind_cos", _wind_cos, deps=["wind_dir_deg"]))
 
 
-# In[17]:
+# In[13]:
 
 
 import nbformat
@@ -115,7 +115,7 @@ with open("main2.py", "w", encoding="utf-8") as f:
     f.write(source)
 
 
-# In[18]:
+# In[14]:
 
 
 load_dotenv(override=True)
@@ -160,7 +160,7 @@ except Exception as e:
     print("[warn] 30‑day stats merge skipped:", e)
 
 
-# In[ ]:
+# In[15]:
 
 
 # --- 追加特徴量（Feature Registry 経由） ---
@@ -168,11 +168,7 @@ df = apply_features(df)
 
 exclude = []
 
-# for lane in range(1, 7):
-#       # --- 対象列を決める（ターゲット & キー列は除外） ---
-#       exclude.append(
-#             f"lane{lane}_st",
-#       )
+#  
 
 df.drop(columns=exclude, inplace=True, errors="ignore")
 
@@ -212,7 +208,7 @@ scaler_filename = "artifacts/wind_scaler.pkl"
 joblib.dump(scaler, scaler_filename)
 
 
-# In[20]:
+# In[16]:
 
 
 def encode(col):
@@ -224,7 +220,7 @@ venue2id = encode("venue")
 # race_type2id = encode("race_type")
 
 
-# In[21]:
+# In[17]:
 
 
 # ============================================================
@@ -372,7 +368,7 @@ def pairwise_margin_loss(pairwise_scores: torch.Tensor, ranks: torch.Tensor, mar
     return loss_fn(output.view(-1), torch.zeros_like(output).view(-1), target.view(-1))
 
 
-# In[22]:
+# In[18]:
 
 
 def pl_nll(scores: torch.Tensor, ranks: torch.Tensor) -> torch.Tensor:
@@ -402,7 +398,7 @@ ranks  = torch.tensor([[1, 2, 3, 4, 5, 6]], dtype=torch.int64)    # lane0 が 1 
 print("pl_nll should be ~0 :", pl_nll(scores, ranks).item())
 
 
-# In[ ]:
+# In[19]:
 
 
 df["race_date"] = pd.to_datetime(df["race_date"]).dt.date
@@ -605,7 +601,7 @@ writer.close()
 
 
 
-# In[29]:
+# In[24]:
 
 
 from roi_util import ROIAnalyzer
@@ -647,18 +643,23 @@ print(f"columns: {', '.join(df_recent.columns)}")
 # print("✅ Model - boat_in (Linear input):", model_recent.boat_fc.in_features)
 # ============================================================
 
-analyzer = ROIAnalyzer(model=model, scaler=scaler, num_cols=NUM_COLS)
+analyzer = ROIAnalyzer(model=model, scaler=scaler,
+                       num_cols=NUM_COLS, device=device)
 
-# ----- metrics & equity -----
-df_met = analyzer.compute_metrics_dataframe(df_eval=df_recent, tau=1)
+df_met = analyzer.compute_metrics_dataframe(
+    df_eval=df_recent,
+    calibrate="platt"        # ← Platt scaling で確率をキャリブレーション
+)
 df_met.to_csv("artifacts/metrics_last_3months.csv", index=False)
+
 df_eq = ROIAnalyzer.compute_equity_curve(
     df_met,
-    bet_unit=100,          # 1 口 = 0.1 単位
+    bet_unit=1,              # 1 unit = minimum 100 JPY wager
     bet_mode="kelly",
-    min_conf=0.2,          # 信頼度しきい値
-    min_edge=0.2,            # Edge が正のものだけ
-    min_kelly=0            # Kelly > 0 のみ
+    min_conf=0,            # 信頼度しきい値
+    min_edge=0,            # 期待値エッジの下限
+    min_kelly=0.00,          # 極小ケリーはスキップ
+    use_conf_factor=True     # conf に応じて賭け金をスケール
 )
 df_eq.to_csv("artifacts/equity_curve_last_3months.csv", index=False)
 
@@ -689,7 +690,7 @@ ROIAnalyzer.plot_equity_curve(df_eq,
 
 
 
-# In[30]:
+# In[21]:
 
 
 # --------------------------------------------------------------------------

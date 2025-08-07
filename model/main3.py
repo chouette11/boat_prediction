@@ -1,12 +1,16 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[16]:
+# In[50]:
 
+
+get_ipython().run_line_magic('load_ext', 'autoreload')
+get_ipython().run_line_magic('autoreload', '2')
 
 import torch
 import pandas as pd, psycopg2, os
 from sklearn.preprocessing import StandardScaler
+from sklearn.isotonic import IsotonicRegression
 import numpy as np  
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -18,7 +22,7 @@ import matplotlib.pyplot as plt
 # --- TensorBoard ---
 from torch.utils.tensorboard import SummaryWriter
 import time
-from BoatRaceDataset import BoatRaceDataset
+from BoatRaceDataset2 import BoatRaceDataset     # ← MTL 対応版
 import itertools
 
 # --- reproducibility helpers ---
@@ -99,23 +103,23 @@ register_feature(FeatureDef("wind_sin", _wind_sin, deps=["wind_dir_deg"]))
 register_feature(FeatureDef("wind_cos", _wind_cos, deps=["wind_dir_deg"]))
 
 
-# In[17]:
+# In[51]:
 
 
 import nbformat
 from nbconvert import PythonExporter
 
-with open("main2.ipynb", "r", encoding="utf-8") as f:
+with open("main3.ipynb", "r", encoding="utf-8") as f:
     nb = nbformat.read(f, as_version=4)
 
 exporter = PythonExporter()
 source, _ = exporter.from_notebook_node(nb)
 
-with open("main2.py", "w", encoding="utf-8") as f:
+with open("main3.py", "w", encoding="utf-8") as f:
     f.write(source)
 
 
-# In[18]:
+# In[52]:
 
 
 load_dotenv(override=True)
@@ -133,34 +137,34 @@ DB_CONF = {
 # ------------------------------------------------------------------
 conn = psycopg2.connect(**DB_CONF)
 df = pd.read_sql("""
-    SELECT * FROM feat.train_features2
+    SELECT * FROM feat.train_features3
     WHERE race_date <= '2024-12-31'
 """, conn)
 
 
 print(f"Loaded {len(df)} rows from the database.")
 
-# ------------------------------------------------------------------
-# Low‑cost performance boost:
-# 30‑day rolling stats per racer (starts, win‑rate, etc.)
-# ------------------------------------------------------------------
-try:
-    hist30 = pd.read_sql("SELECT * FROM feat.racer_hist_30d", conn)
-    # add lane‑specific suffixes and left‑join for every lane
-    for lane in range(1, 7):
-        df = df.merge(
-            hist30.add_suffix(f"_l{lane}"),            # e.g. starts_30d_l1
-            how="left",
-            left_on=f"lane{lane}_racer_id",
-            right_on=f"racer_id_l{lane}"
-        )
-    print(f"[info] merged 30‑day stats ‑ new shape: {df.shape}")
-except Exception as e:
-    # keep pipeline running even if the view is missing
-    print("[warn] 30‑day stats merge skipped:", e)
+# # ------------------------------------------------------------------
+# # Low‑cost performance boost:
+# # 30‑day rolling stats per racer (starts, win‑rate, etc.)
+# # ------------------------------------------------------------------
+# try:
+#     hist30 = pd.read_sql("SELECT * FROM feat.racer_hist_30d", conn)
+#     # add lane‑specific suffixes and left‑join for every lane
+#     for lane in range(1, 7):
+#         df = df.merge(
+#             hist30.add_suffix(f"_l{lane}"),            # e.g. starts_30d_l1
+#             how="left",
+#             left_on=f"lane{lane}_racer_id",
+#             right_on=f"racer_id_l{lane}"
+#         )
+#     print(f"[info] merged 30‑day stats ‑ new shape: {df.shape}")
+# except Exception as e:
+#     # keep pipeline running even if the view is missing
+#     print("[warn] 30‑day stats merge skipped:", e)
 
 
-# In[ ]:
+# In[53]:
 
 
 # --- 追加特徴量（Feature Registry 経由） ---
@@ -192,8 +196,8 @@ df[NUM_COLS] = scaler.transform(df[NUM_COLS])
 bool_cols = [c for c in df.columns if c.endswith("_fs_flag")]
 df[bool_cols] = df[bool_cols].fillna(False).astype(bool)
 
-rank_cols = [f"lane{l}_rank" for l in range(1, 7)]
-df[rank_cols] = df[rank_cols].fillna(7).astype("int32")
+# rank_cols = [f"lane{l}_rank" for l in range(1, 7)]
+# df[rank_cols] = df[rank_cols].fillna(7).astype("int32")
 df.to_csv("artifacts/train_features.csv", index=False)
 display(df.head())
 print("データフレーム全体の欠損値の総数:", df.isnull().sum().sum())
@@ -212,7 +216,7 @@ scaler_filename = "artifacts/wind_scaler.pkl"
 joblib.dump(scaler, scaler_filename)
 
 
-# In[20]:
+# In[54]:
 
 
 def encode(col):
@@ -224,7 +228,7 @@ venue2id = encode("venue")
 # race_type2id = encode("race_type")
 
 
-# In[21]:
+# In[55]:
 
 
 # ============================================================
@@ -249,21 +253,39 @@ def peek_one(df: pd.DataFrame, seed: int = 0) -> None:
 
 # ---------------------------------------------
 # ここで一度だけ呼んで目視確認しておくとズレにすぐ気付けます
-# peek_one(df)
+peek_one(df)
 # ============================================================
 
 
 LANE_DIM = 8
-class SimpleCPLNet(nn.Module):
+# ---------------- Loss / Regularization Weights -----------------
+LAMBDA_ST = 0.1      # weight for ST‑MSE  (was 0.3)
+L1_ALPHA  = 0.02     # weight for rank‑L1 loss
+CLIP_NORM = 10.0     # gradient‑clipping threshold (was 5.0)
+RANKNET_ALPHA = 0.10   # weight for pairwise RankNet loss
+TEMPERATURE   = 0.80   # logits are divided by T at inference
+LAMBDA_WIN = 1.0        # weight for winner‑BCE loss
+
+class DualHeadRanker(nn.Module):
     """
     ctx(6) + boat(6) → lane ごとにスコア 1 個
     """
-    def __init__(self, ctx_in=6, boat_in=6, hidden=64, lane_dim=LANE_DIM):
+    def __init__(self, ctx_in=6, boat_in=6, hidden=160, lane_dim=LANE_DIM):
         super().__init__()
         self.lane_emb = nn.Embedding(6, lane_dim)
         self.ctx_fc   = nn.Linear(ctx_in, hidden)
         self.boat_fc  = nn.Linear(boat_in + lane_dim, hidden)
-        self.head = nn.Sequential(
+        self.head_rank = nn.Sequential(
+            nn.Linear(hidden, hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, 1)
+        )
+        self.head_st = nn.Sequential(
+            nn.Linear(hidden, hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, 1)
+        )
+        self.head_win = nn.Sequential(
             nn.Linear(hidden, hidden),
             nn.ReLU(),
             nn.Linear(hidden, 1)
@@ -277,124 +299,76 @@ class SimpleCPLNet(nn.Module):
 
     def forward(self, ctx, boats, lane_ids):  # boats:(B,6,4) lane_ids:(B,6)
         B, L, _ = boats.size()
-        ctx_emb  = self.ctx_fc(ctx)           # (B,h)
-        # DataLoader から来る lane_ids が (B,) なら (B,6) へブロードキャスト
-        # -------- lane_ids の形状を必ず (B,6) にそろえる --------
-        if lane_ids.dim() == 1:               # (B,) → (B,6)
+        ctx_emb  = self.ctx_fc(ctx)          # (B,h)
+
+        if lane_ids.dim() == 1:
             lane_ids = lane_ids.unsqueeze(1).expand(-1, L)
-        elif lane_ids.dim() == 2 and lane_ids.size(1) == 1:  # (B,1) → (B,6)
+        elif lane_ids.dim() == 2 and lane_ids.size(1) == 1:
             lane_ids = lane_ids.expand(-1, L)
-        # 以外 (既に (B,6)) はそのままで OK
-        lane_ids = lane_ids.contiguous()      # Embedding 要求に備え contiguous 化
+        lane_ids = lane_ids.contiguous()
 
-        lane_emb = self.lane_emb(lane_ids)    # (B,6,lane_dim)
+        lane_emb = self.lane_emb(lane_ids)   # (B,6,lane_dim)
         boat_inp = torch.cat([boats, lane_emb], dim=-1)
-        boat_emb = self.boat_fc(boat_inp)     # (B,6,h)
+        boat_emb = self.boat_fc(boat_inp)    # (B,6,h)
 
-        # broadcast ctx → 各 lane
-        score = self.head(torch.tanh(ctx_emb.unsqueeze(1) + boat_emb))  # (B,6,1)
-        return score.squeeze(-1)           # (B,6)
+        h = torch.tanh(ctx_emb.unsqueeze(1) + boat_emb)  # (B,6,h)
 
-# ====================== PairwiseModel追加 ======================
-class PairwiseModel(nn.Module):
+        st_pred   = self.head_st(h).squeeze(-1)     # (B,6)
+        rank_pred = self.head_rank(h).squeeze(-1)   # (B,6)
+        win_logits = self.head_win(h).squeeze(-1)   # (B,6)
+        return st_pred, rank_pred, win_logits
+
+# --- alias for legacy references ---
+SimpleCPLNet = DualHeadRanker
+
+
+
+# In[56]:
+
+
+def pl_nll(scores: torch.Tensor, ranks: torch.Tensor, reduce: bool = True) -> torch.Tensor:
     """
-    各艇の特徴量からペアワイズ比較スコアを学習するモデル
+    Plackett‑Luce negative log‑likelihood.
+
+    Parameters
+    ----------
+    scores : (B,6)  lane scores (higher = better)
+    ranks  : (B,6)  1=1st … 6=6th   (smaller = better)
+    reduce : bool   If True (default) return mean over batch.
+                    If False, return per‑sample loss vector (B,).
+
+    Notes
+    -----
+    Adopts log‑sum‑exp trick for numerical stability.
     """
-    def __init__(self, boat_dim, hidden_dim=64):
-        super().__init__()
-        self.boat_fc = nn.Linear(boat_dim, hidden_dim)
-        self.pair_fc = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 1)
-        )
+    scores = scores.clamp(-20.0, 20.0)        # avoid Inf/NaN
 
-    def forward(self, boats):  # boats: (B, 6, F)
-        emb = self.boat_fc(boats)  # (B, 6, H)
-
-        pairwise_scores = []
-        for i in range(6):
-            for j in range(6):
-                if i == j:
-                    continue
-                diff = emb[:, i] - emb[:, j]  # (B, H)
-                score_ij = self.pair_fc(diff)  # (B, 1)
-                pairwise_scores.append(score_ij)
-
-        pairwise_scores = torch.cat(pairwise_scores, dim=1)  # (B, 30)
-        return pairwise_scores
-
-
-# ====================== PairwiseModel 用 utility ======================
-def pairwise_scores_to_ranks(pairwise_scores: torch.Tensor) -> torch.Tensor:
-    """
-    ペアワイズスコア (B, 30) を各艇ごとの総勝利数に変換し、
-    それをもとに1〜6位の順位を決定する。
-    """
-    B = pairwise_scores.size(0)
-    wins = torch.zeros(B, 6, device=pairwise_scores.device)
-    idx = 0
-    for i in range(6):
-        for j in range(6):
-            if i == j:
-                continue
-            wins[:, i] += (pairwise_scores[:, idx] > 0).float()
-            idx += 1
-    # 勝利数が多い艇が上位（順位1）となる
-    return wins.argsort(dim=1, descending=True).argsort(dim=1) + 1  # (B, 6)
-
-
-def pairwise_margin_loss(pairwise_scores: torch.Tensor, ranks: torch.Tensor, margin=1.0) -> torch.Tensor:
-    """
-    正解順位に基づいて i が j に勝つべきペアを抽出し、
-    それに対して MarginRankingLoss を適用。
-    """
-    B = ranks.size(0)
-    target = []
-    output = []
-
-    idx = 0
-    for i in range(6):
-        for j in range(6):
-            if i == j:
-                continue
-            # iがjより上位（rankが小さい）なら1、それ以外は-1
-            target_ij = torch.sign(ranks[:, j] - ranks[:, i])  # (B,)
-            target.append(target_ij)
-            output.append(pairwise_scores[:, idx])
-            idx += 1
-
-    target = torch.stack(target, dim=1)  # (B,30)
-    output = torch.stack(output, dim=1)  # (B,30)
-
-    loss_fn = nn.MarginRankingLoss(margin=margin, reduction='mean')
-    # flattenして loss 計算
-    return loss_fn(output.view(-1), torch.zeros_like(output).view(-1), target.view(-1))
-
-
-# In[22]:
-
-
-def pl_nll(scores: torch.Tensor, ranks: torch.Tensor) -> torch.Tensor:
-    """
-    scores : (B, 6) ― lane0 – lane5 のスコア
-    ranks  : (B, 6) ― **1 が 1 着, … 6 が 6 着**（列番号ではない）
-   """
-    scores = scores.clamp(-20.0, 20.0)
-
-    # 着順 (1 → 6) に並んだ lane index を取得
-    order = torch.argsort(ranks, dim=1)      # shape (B,6)
-
+    order = torch.argsort(ranks, dim=1)       # (B,6) winner→last
     nll = torch.zeros(scores.size(0), device=scores.device)
-    s   = scores.clone()
-    for pos in range(6):
-        log_denom = torch.logsumexp(s, dim=1)            # log Σₗ exp
-        idx       = order[:, pos]                        # (B,)
-        chosen    = s.gather(1, idx.unsqueeze(1)).squeeze(1)
-        nll      += log_denom - chosen
-        s         = s.scatter(1, idx.unsqueeze(1), float('-inf'))
+    s = scores.clone()
 
-    return nll.mean()
+    for pos in range(6):
+        log_denom = torch.logsumexp(s, dim=1)                 # (B,)
+        idx = order[:, pos]                                   # (B,)
+        chosen = s.gather(1, idx.unsqueeze(1)).squeeze(1)     # (B,)
+        nll += log_denom - chosen
+        s = s.scatter(1, idx.unsqueeze(1), float('-inf'))
+
+    return nll.mean() if reduce else nll
+
+# --- Pairwise RankNet loss ---
+def ranknet_loss(scores: torch.Tensor, ranks: torch.Tensor) -> torch.Tensor:
+    """
+    Pairwise RankNet loss (cross‑entropy on all lane pairs).
+    ranks : (B,6) with 1=best … 6=worst.
+    """
+    pair_idx = list(itertools.combinations(range(6), 2))
+    loss_acc = 0.0
+    for i, j in pair_idx:
+        S_ij = torch.sign(ranks[:, j] - ranks[:, i])  # +1 if i<j (i better)
+        diff = scores[:, i] - scores[:, j]
+        loss_acc += torch.nn.functional.softplus(-S_ij * diff).mean()
+    return loss_acc / len(pair_idx)
 
 # ── pl_nll が正しいか 3 秒で判定 ──
 scores = torch.tensor([[6, 5, 4, 3, 2, 1]], dtype=torch.float32)  # lane0 が最強
@@ -402,18 +376,16 @@ ranks  = torch.tensor([[1, 2, 3, 4, 5, 6]], dtype=torch.int64)    # lane0 が 1 
 print("pl_nll should be ~0 :", pl_nll(scores, ranks).item())
 
 
-# In[ ]:
+# In[57]:
 
 
 df["race_date"] = pd.to_datetime(df["race_date"]).dt.date
 latest_date = df["race_date"].max()
 cutoff = latest_date - dt.timedelta(days=90)
 
-mode = "zscore"  # "raw", "log", "zscore" も試せる
-ds_train = BoatRaceDataset(df[df["race_date"] <  cutoff], mode=mode)
-ds_val   = BoatRaceDataset(df[df["race_date"] >= cutoff], mode=mode)
-print(f"train: {len(ds_train)}  val: {len(ds_val)}")
-# print("train:", ds_train[0])  # 1 レースの特徴量を確認
+mode = "diff"  # "raw", "log", "zscore" も試せる
+ds_train = BoatRaceDataset(df[df["race_date"] <  cutoff])
+ds_val   = BoatRaceDataset(df[df["race_date"] >= cutoff])
 
 loader_train = DataLoader(ds_train, batch_size=256, shuffle=True)
 loader_val   = DataLoader(ds_val,   batch_size=512)
@@ -421,8 +393,129 @@ loader_val   = DataLoader(ds_val,   batch_size=512)
 # ------------------- ⑤ 学習ループ（LR↓ + Clip） --------------
 device = "cuda" if torch.cuda.is_available() else "cpu"
 boat_dim = ds_train.boat_dim
-model = SimpleCPLNet(boat_in=boat_dim).to(device)
-opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-4)
+model = DualHeadRanker(boat_in=boat_dim).to(device)
+opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=5e-5)
+
+
+# In[65]:
+
+
+# # ------------------------- quick diagnostics --------------------------
+# # Set RUN_DIAG = True to automatically run:
+# #   A) learning‑curve vs. data fraction
+# #   B) tiny‑set over‑fit test
+# # Diagnostics run *once* before the main training loop.
+
+def evaluate_model(model, dataset, device):
+    model.eval()
+    loader = DataLoader(dataset, batch_size=512)
+    total_loss = 0
+    with torch.no_grad():
+        # 6 要素を受け取り、ST は無視
+        for ctx, boats, lane_ids, ranks, *_ in loader:
+            ctx, boats = ctx.to(device), boats.to(device)
+            lane_ids, ranks = lane_ids.to(device), ranks.to(device)
+
+            _, scores, _ = model(ctx, boats, lane_ids)   # ST & win logits are ignored
+            loss = pl_nll(scores, ranks)
+            total_loss += loss.item() * len(ctx)
+    return total_loss / len(dataset)
+
+
+# def run_experiment(data_frac, df_full, mode="zscore", epochs=5, device="cpu"):
+#     df_frac = df_full.sample(frac=data_frac, random_state=42)
+#     df_frac["race_date"] = pd.to_datetime(df_frac["race_date"]).dt.date
+#     latest_date = df_frac["race_date"].max()
+#     cutoff = latest_date - dt.timedelta(days=90)  # last 3 months used as validation set
+#     ds_train = BoatRaceDataset(df_frac[df_frac["race_date"] < cutoff])
+#     ds_val = BoatRaceDataset(df_frac[df_frac["race_date"] >= cutoff])
+
+#     loader_train = DataLoader(ds_train, batch_size=256, shuffle=True)
+#     loader_val = DataLoader(ds_val, batch_size=512)
+
+#     boat_dim = ds_train.boat_dim
+#     model = DualHeadRanker(boat_in=boat_dim).to(device)
+#     opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=5e-5)
+
+#     for epoch in range(epochs):
+#         model.train()
+#         for ctx, boats, lane_ids, ranks, *_ in loader_train:
+#             ctx, boats = ctx.to(device), boats.to(device)
+#             lane_ids, ranks = lane_ids.to(device), ranks.to(device)
+
+#             _, scores, _ = model(ctx, boats, lane_ids)        # discard ST & win head
+#             loss = (pl_nll(scores, ranks, reduce=False) *
+#                     torch.where(ranks[:,0]==1,
+#                                 torch.tensor(1.0, device=ranks.device),
+#                                 torch.tensor(1.5, device=ranks.device))).mean()
+#             opt.zero_grad(); loss.backward(); opt.step()
+
+#     train_loss = evaluate_model(model, ds_train, device)
+#     val_loss = evaluate_model(model, ds_val, device)
+#     return train_loss, val_loss
+
+# # 学習曲線の描画
+# def plot_learning_curve(df, device):
+#     data_fracs = [0.01, 0.05, 0.1, 0.2, 0.5, 1.0]
+#     results = []
+
+#     for frac in data_fracs:
+#         tr_loss, val_loss = run_experiment(frac, df, device=device)
+#         print(f"Data frac {frac:.2f} → Train: {tr_loss:.4f} / Val: {val_loss:.4f}")
+#         results.append((frac, tr_loss, val_loss))
+
+#     fracs, tr_losses, val_losses = zip(*results)
+#     plt.plot(fracs, tr_losses, label="Train Loss")
+#     plt.plot(fracs, val_losses, label="Val Loss")
+#     plt.xlabel("Training Data Fraction")
+#     plt.ylabel("Loss")
+#     plt.title("Learning Curve")
+#     plt.legend()
+#     plt.grid(True)
+#     plt.show()
+
+# def overfit_tiny(df: pd.DataFrame, device: str = "cpu"):
+#     """
+#     データセットを 10 行だけに縮小し、500 step で過学習できるか検証
+#     """
+#     tiny_df = df.sample(10, random_state=1).reset_index(drop=True)
+#     tiny_ds = BoatRaceDataset(tiny_df)
+#     tiny_loader = DataLoader(tiny_ds, batch_size=10, shuffle=True)
+
+#     net = DualHeadRanker().to(device)
+#     opt = torch.optim.AdamW(net.parameters(), lr=3e-3)
+
+#     for _ in range(500):
+#         ctx, boats, lane_ids, ranks, st_true, st_mask = next(iter(tiny_loader))
+#         ctx, boats = ctx.to(device), boats.to(device)
+#         lane_ids, ranks = lane_ids.to(device), ranks.to(device)
+#         st_true, st_mask = st_true.to(device), st_mask.to(device)
+#         st_pred, scores, _ = net(ctx, boats, lane_ids)
+#         pl_loss = (pl_nll(scores, ranks, reduce=False) *
+#                    torch.where(ranks[:,0]==1,
+#                                torch.tensor(1.0, device=ranks.device),
+#                                torch.tensor(1.5, device=ranks.device))).mean()
+#         mse_st = ((st_pred - st_true) ** 2 * st_mask.float()).sum() / st_mask.float().sum()
+#         loss = pl_loss + LAMBDA_ST * mse_st
+#         opt.zero_grad(); loss.backward(); opt.step()
+
+#     print("[tiny] final loss:", loss.item())
+
+# RUN_DIAG = True
+
+# if RUN_DIAG:
+#     print("[diag] Running learning‑curve vs. data fraction …")
+#     plot_learning_curve(df, device)
+#     print("[diag] Running 10‑row overfit_tiny() …")
+#     overfit_tiny(df, device)
+#     print("[diag]   ► finished quick diagnostics\n")
+
+
+# In[59]:
+
+
+# ---------------------------------------------------------------------
+# print(f"train: {len(ds_train)}  val: {len(ds_val)}"
 
 EPOCHS = 20
 # --- TensorBoard setup ---
@@ -431,28 +524,49 @@ os.makedirs(log_dir, exist_ok=True)
 writer = SummaryWriter(log_dir=log_dir)
 for epoch in range(EPOCHS):
     if epoch == 0:                  # 1 エポック目だけ試す例
-        ctx, boats, lane_ids, ranks = next(iter(loader_train))
+        ctx, boats, lane_ids, ranks, st_true, st_mask = next(iter(loader_train))
         ctx, boats = ctx.to(device), boats.to(device)
         lane_ids = lane_ids.to(device)
+        st_true, st_mask = st_true.to(device), st_mask.to(device)
 
-        scores = model(ctx, boats, lane_ids)
-        scores.sum().backward()     # ダミー backward
+        st_pred, scores, win_logits = model(ctx, boats, lane_ids)
+        (st_pred.sum() + scores.sum() + win_logits.sum()).backward()     # ダミー backward
         grad_norm = sum(p.grad.abs().mean().item() for p in model.parameters())
-        print(f"[debug] average |grad| = {grad_norm:.3e}")
+        # print(f"[debug] average |grad| = {grad_norm:.3e}")
     # ---- train ----
     model.train(); tr_sum = 0
-    for ctx, boats, lane_ids, ranks in loader_train:
+    grad_sum, grad_steps = 0.0, 0
+    for ctx, boats, lane_ids, ranks, st_true, st_mask in loader_train:
         ctx, boats = ctx.to(device), boats.to(device)
         lane_ids, ranks = lane_ids.to(device), ranks.to(device)
+        st_true, st_mask = st_true.to(device), st_mask.to(device)
 
-        scores = model(ctx, boats, lane_ids)
-        pl_loss = pl_nll(scores, ranks)
+        st_pred, scores, win_logits = model(ctx, boats, lane_ids)
+        loss_each = pl_nll(scores, ranks, reduce=False)             # (B,)
+        sample_weight = torch.where(ranks[:, 0] == 1,               # lane1 winner?
+                                    torch.tensor(1.0, device=ranks.device),
+                                    torch.tensor(1.5, device=ranks.device))
+        pl_loss = (loss_each * sample_weight).mean()
+        mse_st = ((st_pred - st_true) ** 2 * st_mask.float()).sum() / st_mask.float().sum()
         pred_rank = scores.argsort(dim=1, descending=True).argsort(dim=1) + 1  # 1〜6 着になるよう変換
         l1_loss = nn.L1Loss()(pred_rank.float(), ranks.float())
-        loss = pl_loss + 0.3 * l1_loss  # alpha=0.3 は調整可能
+        rn_loss = ranknet_loss(scores, ranks)
+        winner_true = (ranks == 1).float()            # one‑hot (B,6)
+        bce_win = nn.BCEWithLogitsLoss()(win_logits, winner_true)
+        loss = pl_loss + LAMBDA_ST * mse_st + L1_ALPHA * l1_loss + \
+               RANKNET_ALPHA * rn_loss + LAMBDA_WIN * bce_win
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)  # ★勾配爆発対策★
+        torch.nn.utils.clip_grad_norm_(model.parameters(), CLIP_NORM)  # ★勾配爆発対策★
         opt.step()
+
+        # ---- gradient magnitude tracking ----
+        g_tot, g_cnt = 0.0, 0
+        for p in model.parameters():
+            if p.grad is not None:
+                g_tot += p.grad.detach().abs().mean().item()
+                g_cnt += 1
+        grad_sum += g_tot / max(g_cnt, 1)
+        grad_steps += 1
 
         tr_sum += loss.item() * len(ctx)
 
@@ -460,19 +574,39 @@ for epoch in range(EPOCHS):
 
     # ---- validation ----
     model.eval(); val_sum = 0
+    # --- validation: also compute st MSE/MAE
+    mse_st_accum, mae_st_accum, n_st = 0.0, 0.0, 0.0
     with torch.no_grad():
-        for ctx, boats, lane_ids, ranks in loader_val:
+        for ctx, boats, lane_ids, ranks, st_true, st_mask in loader_val:
             ctx, boats = ctx.to(device), boats.to(device)
             lane_ids, ranks = lane_ids.to(device), ranks.to(device)
-            scores = model(ctx, boats, lane_ids)
+            st_true, st_mask = st_true.to(device), st_mask.to(device)
+            st_pred, scores, _ = model(ctx, boats, lane_ids)
             pl_loss = pl_nll(scores, ranks)
+            # ST MSE
+            mse_st = ((st_pred - st_true) ** 2 * st_mask.float()).sum() / st_mask.float().sum()
+            # ST MAE
+            abs_err = (st_pred - st_true).abs() * st_mask.float()
+            mae_st = abs_err.sum() / st_mask.float().sum()
+            # accumulate for epoch
+            mse_st_accum += ( ((st_pred - st_true) ** 2) * st_mask.float() ).sum().item()
+            mae_st_accum += abs_err.sum().item()
+            n_st += st_mask.float().sum().item()
             pred_rank = scores.argsort(dim=1, descending=True).argsort(dim=1) + 1
             l1_loss = nn.L1Loss()(pred_rank.float(), ranks.float())
-            val_sum += (pl_loss + 0.3 * l1_loss).item() * len(ctx)
+            rn_loss = ranknet_loss(scores, ranks)
+            total = pl_loss + LAMBDA_ST * mse_st + L1_ALPHA * l1_loss + RANKNET_ALPHA * rn_loss
+            val_sum += total.item() * len(ctx)
 
     val_nll = val_sum / len(loader_val.dataset)
+    # epoch-wise st metrics
+    st_mse_val = mse_st_accum / n_st if n_st > 0 else float('nan')
+    st_mae_val = mae_st_accum / n_st if n_st > 0 else float('nan')
 
-    print(f"epoch {epoch:2d}  train_nll {tr_nll:.4f}  val_nll {val_nll:.4f}")
+    avg_grad = grad_sum / max(grad_steps, 1)
+    writer.add_scalar("diag/avg_grad", avg_grad, epoch)
+    print(f"epoch {epoch:2d}  train_nll {tr_nll:.4f}  val_nll {val_nll:.4f}  |grad| {avg_grad:.2e}")
+    print(f"ST MSE: {st_mse_val:.4f}  ST MAE: {st_mae_val:.4f}")
 
     # ---- accuracy & 三連単的中率 ----
     def top1_accuracy(scores, ranks):
@@ -492,11 +626,11 @@ for epoch in range(EPOCHS):
     # accuracy 評価
     model.eval(); all_scores, all_ranks = [], []
     with torch.no_grad():
-        for ctx, boats, lane_ids, ranks in loader_val:
+        for ctx, boats, lane_ids, ranks, _, _ in loader_val:
             ctx, boats = ctx.to(device), boats.to(device)
             lane_ids = lane_ids.to(device)
-            scores = model(ctx, boats, lane_ids).cpu()
-            all_scores.append(scores)
+            _, scores, _ = model(ctx, boats, lane_ids)
+            all_scores.append(scores.cpu())
             all_ranks.append(ranks)
 
     all_scores = torch.cat(all_scores, dim=0)
@@ -508,8 +642,81 @@ for epoch in range(EPOCHS):
     writer.add_scalar("loss/val_nll",    val_nll, epoch)
     writer.add_scalar("acc/top1",        acc_top1, epoch)
     writer.add_scalar("acc/trifecta_hit", acc_tri3, epoch)
+    # --- ST metrics to TensorBoard
+    writer.add_scalar("st/mse", st_mse_val, epoch)
+    writer.add_scalar("st/mae", st_mae_val, epoch)
 
-    print(f"Top-1 Acc: {acc_top1:.3f}   Trifecta Hit: {acc_tri3:.3f}")
+    # --- スコア分散と三連単ランク分析 ---
+    def score_confidence_analysis(scores: torch.Tensor) -> torch.Tensor:
+        return scores.var(dim=1)
+
+    def get_trifecta_rank(scores: torch.Tensor, true_ranks: torch.Tensor) -> list:
+        from itertools import permutations
+        B = scores.size(0)
+        results = []
+
+        for b in range(B):
+            score = scores[b]
+            true_rank = true_ranks[b]
+            true_top3 = [i for i, r in enumerate(true_rank.tolist()) if r <= 3]
+            true_top3_sorted = [x for _, x in sorted(zip(true_rank[true_top3], true_top3))]
+
+            trifecta_list = list(permutations(range(6), 3))
+            trifecta_scores = [(triplet, score[list(triplet)].sum().item()) for triplet in trifecta_list]
+            trifecta_scores.sort(key=lambda x: x[1], reverse=True)
+
+            for rank_idx, (triplet, _) in enumerate(trifecta_scores):
+                if list(triplet) == true_top3_sorted:
+                    results.append(rank_idx + 1)
+                    break
+            else:
+                results.append(121)
+        return results
+
+    score_vars = score_confidence_analysis(all_scores)
+    tri_ranks = get_trifecta_rank(all_scores, all_ranks)
+    mean_var = score_vars.mean().item()
+    median_var = score_vars.median().item()
+    mean_tri_rank = np.mean(tri_ranks)
+
+    # print(f"スコア分散の平均: {mean_var:.4f}")
+    # print(f"スコア分散の中央値: {median_var:.4f}")
+    # print(f"正解三連単の予測ランク（平均）: {mean_tri_rank:.2f}")
+
+    writer.add_scalar("score_variance/mean", mean_var, epoch)
+    writer.add_scalar("score_variance/median", median_var, epoch)
+    writer.add_scalar("trifecta_rank/mean", mean_tri_rank, epoch)
+
+    # print(f"Top-1 Acc: {acc_top1:.3f}   Trifecta Hit: {acc_tri3:.3f}")
+
+    # ------------------------------------------------------------------
+    #  Export raw softmax probabilities (6‑class) + winner label (val set)
+    # ------------------------------------------------------------------
+    if epoch == EPOCHS - 1:   # export once after final epoch
+        print("[export] Saving raw softmax probabilities for calibration …")
+        with torch.no_grad():
+            ctx_all, boats_all, lane_ids_all, ranks_all = [], [], [], []
+            for ctx, boats, lane_ids, ranks, *_ in loader_val:
+                ctx_all.append(ctx); boats_all.append(boats)
+                lane_ids_all.append(lane_ids); ranks_all.append(ranks)
+
+            ctx_all   = torch.cat(ctx_all).to(device)
+            boats_all = torch.cat(boats_all).to(device)
+            lane_ids_all = torch.cat(lane_ids_all).to(device)
+            ranks_all = torch.cat(ranks_all).to(device)
+
+            _, score_all, _ = model(ctx_all, boats_all, lane_ids_all)
+            prob_all = torch.softmax(score_all / TEMPERATURE, dim=1)  # (N,6)
+
+            # winner label: 0..5
+            winner_idx = (ranks_all == 1).nonzero(as_tuple=True)[1].cpu().numpy()
+
+            df_probs = pd.DataFrame(prob_all.cpu().numpy(),
+                                    columns=[f"prob_lane{i}" for i in range(1,7)])
+            df_probs["winner"] = winner_idx
+            probs_path = "artifacts/raw_probs_val.csv"
+            df_probs.to_csv(probs_path, index=False)
+            print(f"[export] raw_probs saved → {probs_path}")
 
     # ---- 学習ログを CSV へ追記保存 ----
     import csv
@@ -520,93 +727,50 @@ for epoch in range(EPOCHS):
     with open(log_path, mode="a", newline="") as f:
         writer_csv = csv.writer(f)
         if write_header:
-            writer_csv.writerow(["epoch", "train_nll", "val_nll", "top1_acc", "trifecta_hit"])
-        writer_csv.writerow([epoch, tr_nll, val_nll, acc_top1, acc_tri3])
+            writer_csv.writerow(["epoch", "train_nll", "val_nll", "top1_acc", "trifecta_hit",
+                                 "score_var_mean", "score_var_median", "tri_rank_mean",
+                                 "st_mse", "st_mae"])
+        writer_csv.writerow([epoch, tr_nll, val_nll, acc_top1, acc_tri3,
+                             mean_var, median_var, mean_tri_rank,
+                             st_mse_val, st_mae_val])
 
 
 # --- Close TensorBoard writer after training ---
 writer.close()
 
-# # ------------------- ペアワイズ学習ループ -------------------
-# # --- 評価関数を定義 ---
-# def top1_accuracy_from_pairwise(scores, true_ranks):
-#     pred_ranks = pairwise_scores_to_ranks(scores)
-#     pred_top1 = (pred_ranks == 1).nonzero(as_tuple=True)[1]
-#     true_top1 = (true_ranks == 1).nonzero(as_tuple=True)[1]
-#     return (pred_top1 == true_top1).float().mean().item()
-
-# def trifecta_hit_rate_from_pairwise(scores, true_ranks):
-#     pred_ranks = pairwise_scores_to_ranks(scores)
-#     pred_top3 = torch.topk(-pred_ranks, k=3, dim=1).indices
-#     true_top3 = torch.topk(-true_ranks, k=3, dim=1).indices
-#     hit = [p.tolist() == t.tolist() for p, t in zip(pred_top3, true_top3)]
-#     return sum(hit) / len(hit)
-
-# # PairwiseModelによるペアワイズ学習
-# pairwise_model = PairwiseModel(boat_dim=ds_train.boat_dim).to(device)
-# pairwise_opt = torch.optim.AdamW(pairwise_model.parameters(), lr=3e-4, weight_decay=1e-4)
-
-# pairwise_log_dir = os.path.join("artifacts", "tb", "pairwise_" + time.strftime("%Y%m%d-%H%M%S"))
-# os.makedirs(pairwise_log_dir, exist_ok=True)
-# pairwise_writer = SummaryWriter(log_dir=pairwise_log_dir)
-# for epoch in range(EPOCHS):
-#     pairwise_model.train(); tr_sum = 0
-#     for _, boats, _, ranks in loader_train:
-#         boats, ranks = boats.to(device), ranks.to(device)
-#         scores = pairwise_model(boats)  # (B, 30)
-#         loss = pairwise_margin_loss(scores, ranks)
-#         loss.backward()
-#         torch.nn.utils.clip_grad_norm_(pairwise_model.parameters(), 5.0)
-#         pairwise_opt.step(); pairwise_opt.zero_grad()
-#         tr_sum += loss.item() * len(boats)
-#     tr_loss = tr_sum / len(loader_train.dataset)
-
-#     pairwise_model.eval(); val_sum = 0
-#     with torch.no_grad():
-#         for _, boats, _, ranks in loader_val:
-#             boats, ranks = boats.to(device), ranks.to(device)
-#             scores = pairwise_model(boats)
-#             loss = pairwise_margin_loss(scores, ranks)
-#             val_sum += loss.item() * len(boats)
-#     val_loss = val_sum / len(loader_val.dataset)
-
-#     # accuracy 評価
-#     pairwise_model.eval(); all_scores, all_ranks = [], []
-#     with torch.no_grad():
-#         for _, boats, _, ranks in loader_val:
-#             boats, ranks = boats.to(device), ranks.to(device)
-#             scores = pairwise_model(boats)
-#             all_scores.append(scores.cpu())
-#             all_ranks.append(ranks.cpu())
-
-#     all_scores = torch.cat(all_scores, dim=0)
-#     all_ranks = torch.cat(all_ranks, dim=0)
-
-#     acc_top1 = top1_accuracy_from_pairwise(all_scores, all_ranks)
-#     tri_hit = trifecta_hit_rate_from_pairwise(all_scores, all_ranks)
-
-#     print(f"[Pairwise] epoch {epoch:2d}  train_loss {tr_loss:.4f}  val_loss {val_loss:.4f}  "
-#           f"top1_acc {acc_top1:.3f}  trifecta_hit {tri_hit:.3f}")
-#     # --- TensorBoard logging for PairwiseModel ---
-#     pairwise_writer.add_scalar("pairwise/train_loss", tr_loss, epoch)
-#     pairwise_writer.add_scalar("pairwise/val_loss", val_loss, epoch)
-#     pairwise_writer.add_scalar("pairwise/top1_acc", acc_top1, epoch)
-#     pairwise_writer.add_scalar("pairwise/trifecta_hit", tri_hit, epoch)
-
-# # --- Close TensorBoard writer after pairwise training ---
-# pairwise_writer.close()
 
 
-
-# importance_scores = permute_importance(model, ds_val, device, cols=NUM_COLS)
-# print("▼ 環境特徴量の重要度（val_nll 増加量）:")
-# for k, v in sorted(importance_scores.items(), key=lambda x: -x[1]):
-#     print(f"{k:12s}: {v:.4f}")
+# In[60]:
 
 
+# ---- Monkey‑patch ROIAnalyzer so it uses BoatRaceDataset2 (MTL) ----------
+from types import MethodType
+from BoatRaceDataset2 import BoatRaceDataset as BR2Dataset
+from torch.utils.data import DataLoader
 
-# In[29]:
+class _EvalDatasetMTL(torch.utils.data.Dataset):
+    """
+    Wrap BoatRaceDataset2 but return only 4 items (ctx, boats, lane_ids, ranks)
+    so that roi_util.py can stay unchanged.
+    """
+    def __init__(self, df):
+        self.ds = BR2Dataset(df)
+    def __len__(self):
+        return len(self.ds)
+    def __getitem__(self, idx):
+        ctx, boats, lane_ids, ranks, _, _ = self.ds[idx]
+        return ctx, boats, lane_ids, ranks
 
+def _create_loader_mtl(self, df_eval: pd.DataFrame):
+    """Replacement for ROIAnalyzer._create_loader (MTL‑aware)."""
+    df = self.preprocess_df(df_eval, self.scaler, self.num_cols)
+    ds_eval = _EvalDatasetMTL(df)
+    loader = DataLoader(ds_eval, batch_size=self.batch_size, shuffle=False)
+    lanes_np = df[["first_lane", "second_lane", "third_lane"]].to_numpy(dtype=np.int64) - 1
+    return loader, df, lanes_np
+
+import roi_util as _roi_util_mod
+_roi_util_mod.ROIAnalyzer._create_loader = _create_loader_mtl
 
 from roi_util import ROIAnalyzer
 
@@ -616,13 +780,16 @@ Fetch last 90‑day races, compute edge & Kelly strategy,
 and output ROI / PnL statistics + equity curve.
 """
 today = dt.date.today()
-start_date = today - dt.timedelta(days=20)
+# 2025年1月1日以降のデータを取得する場合は、以下の行を変更してください。
+start_date = dt.date(2025, 1, 1)
+# start_date = today - dt.timedelta(days=20)
 
 query = f"""
-    SELECT * FROM feat.eval_features2
+    SELECT * FROM feat.eval_features3
     WHERE race_date BETWEEN '{start_date}' AND '{today}'
 """
 df_recent = pd.read_sql(query, conn)
+print(df_recent)
 
 df_recent.drop(columns=exclude, inplace=True, errors="ignore")
 
@@ -632,82 +799,351 @@ if df_recent.empty:
 print(f"[simulate] Loaded {len(df_recent)} rows ({start_date} – {today}).")
 print(f"columns: {', '.join(df_recent.columns)}")
 
-# ========== デバッグ: Dataset/Model 入力次元の一致確認 ==========
-# ds_tmp = BoatRaceDataset(df_recent, mode="zscore")
-# loader_tmp = DataLoader(ds_tmp, batch_size=1)
-# ctx_sample, boats_sample, _, _ = next(iter(loader_tmp))
-# ctx_dim = ctx_sample.shape[1]
-# boat_dim = boats_sample.shape[2]
-# print("✅ Dataset - ctx_dim:", ctx_dim)
-# print("✅ Dataset - boat_dim:", boat_dim)
+# ---- wrap MTL model so ROIAnalyzer sees only rank scores ----
+class _RankOnly(nn.Module):
+    """Adapter: forward() returns rank_pred tensor only, temperature-scaled."""
+    def __init__(self, base):
+        super().__init__()
+        self.base = base
+    def forward(self, *args, **kwargs):
+        _, rank_pred, _ = self.base(*args, **kwargs)
+        return rank_pred / TEMPERATURE
 
-# # model_recent をデータセット次元で初期化
-# model_recent = SimpleCPLNet(ctx_in=ctx_dim, boat_in=boat_dim).to(device)
-# print("✅ Model - ctx_in (Linear input):", model_recent.ctx_fc.in_features)
-# print("✅ Model - boat_in (Linear input):", model_recent.boat_fc.in_features)
-# ============================================================
+# ----- metrics & equity (best‑practice defaults) -----
+rank_model = _RankOnly(model).to(device)
+analyzer = ROIAnalyzer(model=rank_model, scaler=scaler,
+                       num_cols=NUM_COLS, device=device)
 
-analyzer = ROIAnalyzer(model=model, scaler=scaler, num_cols=NUM_COLS)
-
-# ----- metrics & equity -----
-df_met = analyzer.compute_metrics_dataframe(df_eval=df_recent, tau=1)
-df_met.to_csv("artifacts/metrics_last_3months.csv", index=False)
-df_eq = ROIAnalyzer.compute_equity_curve(
-    df_met,
-    bet_unit=100,          # 1 口 = 0.1 単位
-    bet_mode="kelly",
-    min_conf=0.2,          # 信頼度しきい値
-    min_edge=0.2,            # Edge が正のものだけ
-    min_kelly=0            # Kelly > 0 のみ
+df_trifecta_met = analyzer.compute_metrics_dataframe(
+    df_eval=df_recent,
+    tau=5.0,                 # ← Fractional‑Kelly倍率を上げてユニットを実用域へ
+    calibrate="platt",        # ← Platt scaling で確率をキャリブレーション
+    bet_type="trifecta",  # ← 三連単を対象にする
 )
-df_eq.to_csv("artifacts/equity_curve_last_3months.csv", index=False)
 
-ROIAnalyzer.plot_equity_curve(df_eq,
-                              title="Equity Curve (conf≥0.8 & edge>0)",
-                              use_jpy=True)
+df_trifecta_met.to_csv("artifacts/metrics_trifecta.csv", index=False)
 
-# df_met.to_csv("metrics_last_3months.csv", index=False)
-# df_eq.to_csv("equity_curve_last_3months.csv", index=False)
-# df_eq[df_eq["bet_units"] > 0][["race_key", "first_lane", "second_lane", "third_lane", "odds", "bet_units"]].to_csv("bet_orders_last_3months.csv", index=False)
-# df_eq[(df_eq["bet_units"] > 0) & (df_eq["hit"] == True)][
-#     ["race_key", "first_lane", "second_lane", "third_lane", "odds", "bet_units", "pnl_jpy"]
-# ].to_csv("hit_bets_last_3months.csv", index=False)
-# print(f"[simulate] ROI (edge≥{tau:.2f}): {df_eq['cum_roi_jpy'].iloc[-1]:.3f} "
-#       f" | Profit: {df_eq['cum_pnl_jpy'].iloc[-1]:,.0f}円 "
-#       f"| Stake: {df_eq['cum_staked_jpy'].iloc[-1]:,.0f}円 "
-#       f"| Bets: {len(df_eq)}")
-
-# max_dd, _ = compute_drawdown(df_eq, use_jpy=True)
-# flat_len = longest_flat_period(df_eq, use_jpy=True)
-# print(f"[simulate] Max DD: {max_dd:,.0f}円 | Longest flat: {flat_len} bets")
-
-# plot_equity_curve(df_eq,
-#                   title=f'Equity (last 3M, τ={tau})',
-#                   use_jpy=True,
-#                   group_by="races")
-# pnl_heatmap(df_met.assign(pnl_jpy=df_eq["pnl_jpy"]), value="pnl_jpy")
+# hitが True の行だけを抽出
+df_trifecta_met_hit = df_trifecta_met[df_trifecta_met["hit"] == True]
+df_trifecta_met_hit.to_csv("artifacts/metrics_trifecta_hit.csv", index=False)
 
 
+df_trifecta_eq = ROIAnalyzer.compute_equity_curve(
+    df_trifecta_met,
+    bet_unit=1,
+    bet_mode="kelly",
+    min_conf=1.0,  # ← Platt scaling でキャリブレーション後の信頼度
+    min_edge=0.0,
+    min_kelly=0.00,
+    max_units=15,
+    use_conf_factor=True
+)
+df_trifecta_eq.to_csv("artifacts/equity_curve_trifecta.csv", index=False)
 
-# In[30]:
+
+ROIAnalyzer.plot_equity_curve(
+    df_trifecta_eq,
+    title="Equity Curve (Platt‑calib, τ=5, conf≥0.2 & edge≥0.3)",
+    use_jpy=True
+)
+
+
+# In[61]:
+
+
+# --- 予測でも「自信度」と「正解三連単の順位」を評価し、CSV に記録 ---
+print("[predict] Evaluating confidence & trifecta rank on recent predictions…")
+
+# ROIAnalyzer の前処理（スケーリング等）をそのまま使ってローダを作成
+loader_eval, _df_eval_proc, _lanes = analyzer._create_loader(df_recent)
+
+# 既に上で用意した rank_model は「rank_pred だけ」を返すアダプタ
+model.eval(); rank_model.eval()
+all_scores, all_ranks = [], []
+with torch.no_grad():
+    for ctx, boats, lane_ids, ranks in loader_eval:
+        ctx, boats, lane_ids = ctx.to(device), boats.to(device), lane_ids.to(device)
+        scores = rank_model(ctx, boats, lane_ids)  # (B,6) already scaled
+        all_scores.append(scores.cpu())
+        all_ranks.append(ranks)
+
+all_scores = torch.cat(all_scores, dim=0)   # (N,6)
+all_ranks  = torch.cat(all_ranks,  dim=0)   # (N,6)
+
+
+# In[ ]:
+
+
+# ---------- helper metrics ----------
+def top1_accuracy(scores: torch.Tensor, ranks: torch.Tensor) -> float:
+    pred_top1 = scores.argmax(dim=1)
+    true_top1 = (ranks == 1).nonzero(as_tuple=True)[1]
+    return (pred_top1 == true_top1).float().mean().item()
+
+def trifecta_hit_rate(scores: torch.Tensor, ranks: torch.Tensor) -> float:
+    """
+    予測スコア上位3艇の順番が、実際の1〜3着と完全一致する割合。
+    """
+    pred_top3 = torch.topk(scores, k=3, dim=1).indices
+    true_top3 = torch.topk(-ranks, k=3, dim=1).indices  # 小さい順に 1→3 着
+    hit = [p.tolist() == t.tolist() for p, t in zip(pred_top3, true_top3)]
+    return float(sum(hit) / len(hit)) if len(hit) else float("nan")
+
+# --- Baseline: always predict trifecta 1-2-3 (lanes 1→2→3) ------------------
+def constant_123_trifecta_hit(ranks: torch.Tensor) -> float:
+    """
+    Hit‑rate when always predicting trifecta 1‑2‑3 in order.
+    """
+    true_top3 = torch.topk(-ranks, k=3, dim=1).indices   # (B,3)
+    baseline  = torch.tensor([0, 1, 2], dtype=torch.long, device=ranks.device)
+    return (true_top3 == baseline).all(dim=1).float().mean().item()
+
+def baseline123_position_accuracy(ranks: torch.Tensor, pos: int) -> float:
+    """
+    Baseline per‑position accuracy when assuming boat pos finishes pos‑th.
+    pos ∈ {1,2,3}
+    """
+    true_idx = (ranks == pos).float().argmax(dim=1)          # (B,)
+    baseline_idx = torch.tensor(pos - 1, dtype=torch.long, device=ranks.device)
+    return (true_idx == baseline_idx).float().mean().item()
+
+def baseline123_top3_unordered_hit(ranks: torch.Tensor) -> float:
+    """
+    Order‑agnostic hit‑rate when always predicting the set {1,2,3}.
+    """
+    true_top3 = torch.topk(-ranks, k=3, dim=1).indices
+    hit = [set(t.tolist()) == {0,1,2} for t in true_top3]
+    return float(sum(hit) / len(hit))
+
+from itertools import permutations
+
+def get_trifecta_rank(scores: torch.Tensor, true_ranks: torch.Tensor) -> list[int]:
+    """真の三連単が、全 120 通りの予測候補の中で何番目か（1 始まり）を返す。"""
+    perms = list(permutations(range(6), 3))
+    res = []
+    for sc, tr in zip(scores, true_ranks):
+        true_top3 = [i for i, r in enumerate(tr.tolist()) if r <= 3]
+        true_top3_sorted = [x for _, x in sorted(zip(tr[true_top3], true_top3))]
+        perm_scores = [(p, sc[list(p)].sum().item()) for p in perms]
+        perm_scores.sort(key=lambda x: x[1], reverse=True)
+        for idx, (p, _) in enumerate(perm_scores):
+            if list(p) == true_top3_sorted:
+                res.append(idx + 1)
+                break
+        else:
+            res.append(len(perms) + 1)
+    return res
+
+# --- Added: strict (order-respecting) trifecta rank ---
+def get_trifecta_rank_ordered(scores: torch.Tensor, true_ranks: torch.Tensor) -> list[int]:
+    perms = list(permutations(range(6), 3))
+    res = []
+    exp_scores = torch.exp(scores)         # (N,6)
+    for es, tr in zip(exp_scores, true_ranks):
+        # true indices for 1st→3rd in correct order
+        ordered_true = sorted(range(6), key=lambda i: tr[i].item())[:3]
+
+        denom0 = es.sum().item()
+        perm_probs = []
+        for p in perms:
+            p0, p1, p2 = p
+            denom1 = denom0
+            denom2 = denom1 - es[p0].item()
+            denom3 = denom2 - es[p1].item()
+            prob = (es[p0] / denom1) * (es[p1] / denom2) * (es[p2] / denom3)
+            perm_probs.append((p, prob.item()))
+
+        perm_probs.sort(key=lambda x: x[1], reverse=True)
+        for idx, (p, _) in enumerate(perm_probs):
+            if list(p) == ordered_true:
+                res.append(idx + 1)        # 1‑based
+                break
+        else:
+            res.append(len(perms) + 1)     # fallback (shouldn't happen)
+    return res
+
+
+# ---------- extra metrics ----------
+def top3_unordered_hit_rate(scores: torch.Tensor, ranks: torch.Tensor) -> float:
+    """
+    True if the model's top‑3 set matches the actual top‑3 set (order‑agnostic).
+    """
+    pred_top3 = torch.topk(scores, k=3, dim=1).indices
+    true_top3 = torch.topk(-ranks, k=3, dim=1).indices
+    hit = [(set(p.tolist()) == set(t.tolist())) for p, t in zip(pred_top3, true_top3)]
+    return float(sum(hit) / len(hit))
+
+def mean_reciprocal_rank(scores: torch.Tensor, ranks: torch.Tensor) -> float:
+    """
+    MRR of predicting the winner (1着).
+    """
+    order = scores.argsort(dim=1, descending=True)          # (B,6)
+    true_winner_idx = (ranks == 1).nonzero(as_tuple=True)[1]
+    rank_pos = (order == true_winner_idx.unsqueeze(1)).nonzero(as_tuple=True)[1] + 1  # 1‑based
+    return (1.0 / rank_pos.float()).mean().item()
+
+def spearman_corr(scores: torch.Tensor, ranks: torch.Tensor) -> float:
+    """
+    Average per‑race Spearman rank correlation between predicted and true rank orders.
+    """
+    pred_rank = scores.argsort(dim=1, descending=True).argsort(dim=1).float() + 1  # 1..6
+    true_rank = ranks.float()
+    d = pred_rank - true_rank
+    rho = 1 - 6 * (d ** 2).sum(dim=1) / (6 * (6**2 - 1))
+    return rho.mean().item()
+
+def trifecta_rank_pl(scores: torch.Tensor, true_ranks: torch.Tensor) -> list[int]:
+    """Plackett-Luce 確率で並べた三連単順位を返す（exact order）。"""
+    perms = list(permutations(range(6), 3))
+    exp_s = torch.exp(scores)
+    res = []
+    for sc, tr in zip(exp_s, true_ranks):
+        # 真の順序 (1→2→3 着)
+        idx123 = [x for _, x in sorted(zip(tr.tolist(), range(6)))][:3]
+        # PL確率を計算
+        probs = []
+        for p in perms:
+            # 第1着
+            denom1 = sc.sum()
+            p1 = sc[p[0]] / denom1
+            # 第2着
+            denom2 = (sc.sum() - sc[p[0]])
+            p2 = sc[p[1]] / denom2
+            # 第3着
+            denom3 = (sc.sum() - sc[p[0]] - sc[p[1]])
+            p3 = sc[p[2]] / denom3
+            probs.append((p, (p1*p2*p3).item()))
+        probs.sort(key=lambda x: x[1], reverse=True)
+        rank = next(i for i,(p,_) in enumerate(probs) if list(p)==idx123) + 1
+        res.append(rank)
+    return res
+
+
+# --- 5レースだけ抜き出して順位を表示 ---
+new_df = pd.DataFrame(columns=["race_index", "true_order", "match_index"])
+
+for i in range(0, len(all_scores), 120):  # 129〜133 レースを表示
+    sc   = all_scores[i]
+    true = all_ranks[i]
+
+    ordered_true = sorted(range(6), key=lambda k: true[k].item())[:3]
+    print(f"\nRace {i}")
+    print(" true order :", ordered_true)
+
+    # PL順で上位5件
+    perms = list(permutations(range(6), 3))
+    es = torch.exp(sc)
+    denom0 = es.sum().item()
+    perm_probs = []
+    for p in perms:
+        d2 = denom0 - es[p[0]].item()
+        d3 = d2     - es[p[1]].item()
+        prob = (es[p[0]] / denom0) * (es[p[1]] / d2) * (es[p[2]] / d3)
+        perm_probs.append((p, prob.item()))
+    perm_probs.sort(key=lambda x: x[1], reverse=True)
+    print(" top-5 by PL :", perm_probs[:5])
+
+    # 正解三連単が何番目に出たか
+    true_order_tuple = tuple(ordered_true)
+    match_index = next((j for j, (order, _) in enumerate(perm_probs) if order == true_order_tuple), -1)
+    print(f'matched: {match_index + 1}')
+
+    # new_dfに追加
+    new_df.loc[len(new_df)] = {
+        "race_index": i,
+        "true_order": ordered_true,
+        "match_index": match_index + 1  # 1-indexed にして表示
+    }
+    
+new_df.to_csv("artifacts/predicted_trifecta_order.csv", index=False)
+# ## ---- compute & print ----
+# score_vars = all_scores.var(dim=1)
+# tri_ranks  = get_trifecta_rank(all_scores, all_ranks)
+# tri_ranks_order = get_trifecta_rank_ordered(all_scores, all_ranks)
+# mean_tri_order  = float(np.mean(tri_ranks_order)) if len(tri_ranks_order) else float("nan")
+
+# acc_top1   = top1_accuracy(all_scores, all_ranks)
+# acc_tri3   = trifecta_hit_rate(all_scores, all_ranks)
+# mean_var   = score_vars.mean().item()
+# median_var = score_vars.median().item()
+# mean_tri   = float(np.mean(tri_ranks)) if len(tri_ranks) else float("nan")
+
+# # ---- compute new metrics ----
+# hit_top3_unordered = top3_unordered_hit_rate(all_scores, all_ranks)
+# mrr_winner        = mean_reciprocal_rank(all_scores, all_ranks)
+# rho_spearman      = spearman_corr(all_scores, all_ranks)
+
+# # ---- baseline metrics (constant 1‑2‑3) ----
+# tri123_hit      = constant_123_trifecta_hit(all_ranks)
+# base_pos1       = baseline123_position_accuracy(all_ranks, 1)
+# base_pos2       = baseline123_position_accuracy(all_ranks, 2)
+# base_pos3       = baseline123_position_accuracy(all_ranks, 3)
+# base_top1       = base_pos1                                   # same as pos1
+# base_top3_unord = baseline123_top3_unordered_hit(all_ranks)
+
+# # --- per-position accuracy (model) ---
+# def position_accuracy(ranks: torch.Tensor, scores: torch.Tensor, pos: int) -> float:
+#     """
+#     Accuracy for predicting which boat finishes pos‑th.
+#     """
+#     # Model's prediction: which boat is pos-th in predicted ranking
+#     pred_rank = scores.argsort(dim=1, descending=True).argsort(dim=1) + 1
+#     pred_idx = (pred_rank == pos).float().argmax(dim=1)
+#     true_idx = (ranks == pos).float().argmax(dim=1)
+#     return (pred_idx == true_idx).float().mean().item()
+
+# acc_pos1 = position_accuracy(all_ranks, all_scores, 1)
+# acc_pos2 = position_accuracy(all_ranks, all_scores, 2)
+# acc_pos3 = position_accuracy(all_ranks, all_scores, 3)
+
+# print(f"[predict] N={len(all_scores)}")
+# print(f"  • Top‑1 Acc              : {acc_top1:.3f}   (baseline {base_top1:.3f})")
+# print(f"  • Pos1/2/3 Acc           : {acc_pos1:.3f}/{acc_pos2:.3f}/{acc_pos3:.3f} "
+#       f"(baseline {base_pos1:.3f}/{base_pos2:.3f}/{base_pos3:.3f})")
+# print(f"  • Top‑3 unordered Hit    : {hit_top3_unordered:.3f}   (baseline {base_top3_unord:.3f})")
+# print(f"  • Trifecta Hit           : {acc_tri3:.3f}   (baseline {tri123_hit:.3f})")
+# print(f"  • Winner MRR             : {mrr_winner:.3f}")
+# print(f"  • Spearman ρ             : {rho_spearman:.3f}")
+# print(f"  • Score variance (mean/median): {mean_var:.4f} / {median_var:.4f}")
+# print(f"  • Avg rank of true trifecta (unordered) : {mean_tri:.2f}")
+# print(f"  • Avg rank of true trifecta (strict)    : {mean_tri_order:.2f}")
+
+# # ---- CSV に追記保存 ----
+# import csv, os
+# os.makedirs("artifacts", exist_ok=True)
+# metrics_path = "artifacts/predict_metrics_recent.csv"
+# write_header = not os.path.exists(metrics_path)
+# with open(metrics_path, "a", newline="") as f:
+#     w = csv.writer(f)
+#     if write_header:
+#         w.writerow(["date", "n_races",
+#                     "top1_acc", "pos1_acc", "pos2_acc", "pos3_acc",
+#                     "top3unordered_hit", "trifecta_hit",
+#                     "baseline123_hit", "baseline123_top1",
+#                     "baseline123_pos1", "baseline123_pos2", "baseline123_pos3",
+#                     "baseline123_top3unordered",
+#                     "winner_mrr", "spearman_rho",
+#                     "var_mean", "var_median", "tri_rank_mean",
+#                     "tri_rank_order_mean"])
+#     w.writerow([str(today), len(all_scores),
+#                 acc_top1, acc_pos1, acc_pos2, acc_pos3,
+#                 hit_top3_unordered, acc_tri3,
+#                 tri123_hit, base_top1,
+#                 base_pos1, base_pos2, base_pos3,
+#                 base_top3_unord,
+#                 mrr_winner, rho_spearman,
+#                 mean_var, median_var, mean_tri, mean_tri_order])
+# print(f"[saved] {metrics_path}")
+
+
+# In[67]:
 
 
 # --------------------------------------------------------------------------
 #  グループ Ablation: 重要列を 5～6 個まとめてドロップして val_nll を比較
 # --------------------------------------------------------------------------
 
-# ---- Permutation Importance ----
-def evaluate_model(model, dataset, device):
-    model.eval()
-    loader = DataLoader(dataset, batch_size=512)
-    total_loss = 0
-    with torch.no_grad():
-        for ctx, boats, lane_ids, ranks in loader:
-            ctx, boats = ctx.to(device), boats.to(device)
-            lane_ids, ranks = lane_ids.to(device), ranks.to(device)
-            loss = pl_nll(model(ctx, boats, lane_ids), ranks)
-            total_loss += loss.item() * len(ctx)
-    return total_loss / len(dataset)
+
 
 def permute_importance(model, dataset, device="cpu", cols=None):
     """
@@ -731,13 +1167,12 @@ def permute_importance(model, dataset, device="cpu", cols=None):
         # --- その列だけランダムに permute ---
         shuffled = df_full.copy()
         shuffled[col] = np.random.permutation(shuffled[col].values)
-        tmp_ds = BoatRaceDataset(shuffled, mode=dataset.mode)
+        tmp_ds = BoatRaceDataset(shuffled)
         loss = evaluate_model(model, tmp_ds, device)
         importances[col] = loss - base_loss   # 悪化分 (大 → 重要)
     return importances
 
 def run_ablation_groups(
-    model_cls,
     df_full: pd.DataFrame,
     group_size: int = 6,
     epochs: int = 5,
@@ -783,21 +1218,25 @@ def run_ablation_groups(
     for g in groups:
         df_drop = df_full.drop(columns=g)
 
-        ds_tr = BoatRaceDataset(df_drop[df_drop["race_date"] < cutoff], mode="zscore")
-        ds_va = BoatRaceDataset(df_drop[df_drop["race_date"] >= cutoff], mode="zscore")
+        ds_tr = BoatRaceDataset(df_drop[df_drop["race_date"] < cutoff])
+        ds_va = BoatRaceDataset(df_drop[df_drop["race_date"] >= cutoff])
 
         ld_tr = DataLoader(ds_tr, batch_size=256, shuffle=True)
         ld_va = DataLoader(ds_va, batch_size=512)
 
-        model = model_cls().to(device)
-        opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-4)
+        model = DualHeadRanker().to(device)
+        opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=5e-5)
 
         for _ in range(epochs):
             model.train()
-            for ctx, boats, lane_ids, ranks in ld_tr:
+            for ctx, boats, lane_ids, ranks, st_true, st_mask in ld_tr:
                 ctx, boats = ctx.to(device), boats.to(device)
                 lane_ids, ranks = lane_ids.to(device), ranks.to(device)
-                loss = pl_nll(model(ctx, boats, lane_ids), ranks)
+                st_true, st_mask = st_true.to(device), st_mask.to(device)
+                st_pred, scores = model(ctx, boats, lane_ids)
+                pl_loss = pl_nll(scores, ranks)
+                mse_st = ((st_pred - st_true) ** 2 * st_mask.float()).sum() / st_mask.float().sum()
+                loss = pl_loss + LAMBDA_ST * mse_st
                 opt.zero_grad(); loss.backward(); opt.step()
 
         val_loss = evaluate_model(model, ds_va, device)
@@ -813,7 +1252,7 @@ print(f"[saved] {imp_path}")
 
 # ② グループ Ablation
 print("▼ Group ablation (drop 6 cols each)")
-ab_results = run_ablation_groups(SimpleCPLNet, df, group_size=6,
+ab_results = run_ablation_groups(df, group_size=6,
                                     epochs=5, device=device)
 abl_path = "artifacts/ablation_results.csv"
 with open(abl_path, "w", newline="") as f:
@@ -858,7 +1297,7 @@ def shap_interaction_heatmap(model, loader_val,
     os.makedirs(os.path.dirname(save_prefix), exist_ok=True)
 
     # ---- まずバッチを取り出して n_samples だけ切り出す ----
-    ctx, boats, lane_ids, _ = next(iter(loader_val))
+    ctx, boats, lane_ids, _, _, _ = next(iter(loader_val))
     ctx, boats, lane_ids = ctx[:n_samples].to(device), \
                            boats[:n_samples].to(device), \
                            lane_ids[:n_samples].to(device)
@@ -989,27 +1428,7 @@ shap_interaction_heatmap(model, loader_val, device=device, n_samples=128)
  # ============================================================
  # ⑤ ── 超小規模データで「過学習できるか」テスト関数
  #       必要時に呼び出して 0.1 以下まで loss が落ちるか確認
- # ------------------------------------------------------------
-def overfit_tiny(df: pd.DataFrame, device: str = "cpu"):
-    """
-    データセットを 10 行だけに縮小し、500 step で過学習できるか検証
-    """
-    tiny_df = df.sample(10, random_state=1).reset_index(drop=True)
-    tiny_ds = BoatRaceDataset(tiny_df, mode=mode)
-    tiny_loader = DataLoader(tiny_ds, batch_size=10, shuffle=True)
-
-    net = SimpleCPLNet().to(device)
-    opt = torch.optim.AdamW(net.parameters(), lr=3e-3)
-
-    for _ in range(500):
-        ctx, boats, lane_ids, ranks = next(iter(tiny_loader))
-        ctx, boats = ctx.to(device), boats.to(device)
-        lane_ids, ranks = lane_ids.to(device), ranks.to(device)
-
-        loss = pl_nll(net(ctx, boats, lane_ids), ranks)
-        opt.zero_grad(); loss.backward(); opt.step()
-
-    print("[tiny] final loss:", loss.item())
+ # -----------------------------------------------------------
 
 
 # ---- tiny データで特徴量の分散を確認 -----------------------
@@ -1051,52 +1470,7 @@ torch.save({
 # ★ 予測用スクリプト（直近3ヶ月データを使って予測） ★
 # ============================================================
 
-def run_experiment(data_frac, df_full, mode="zscore", epochs=5, device="cpu"):
-    df_frac = df_full.sample(frac=data_frac, random_state=42)
-    df_frac["race_date"] = pd.to_datetime(df_frac["race_date"]).dt.date
-    latest_date = df_frac["race_date"].max()
-    cutoff = latest_date - dt.timedelta(days=90)  # last 3 months used as validation set
-    ds_train = BoatRaceDataset(df_frac[df_frac["race_date"] < cutoff], mode=mode)
-    ds_val = BoatRaceDataset(df_frac[df_frac["race_date"] >= cutoff], mode=mode)
 
-    loader_train = DataLoader(ds_train, batch_size=256, shuffle=True)
-    loader_val = DataLoader(ds_val, batch_size=512)
-
-    boat_dim = ds_train.boat_dim
-    model = SimpleCPLNet(boat_in=boat_dim).to(device)
-    opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-4)
-
-    for epoch in range(epochs):
-        model.train()
-        for ctx, boats, lane_ids, ranks in loader_train:
-            ctx, boats = ctx.to(device), boats.to(device)
-            lane_ids, ranks = lane_ids.to(device), ranks.to(device)
-            loss = pl_nll(model(ctx, boats, lane_ids), ranks)
-            opt.zero_grad(); loss.backward(); opt.step()
-
-    train_loss = evaluate_model(model, ds_train, device)
-    val_loss = evaluate_model(model, ds_val, device)
-    return train_loss, val_loss
-
-# 学習曲線の描画
-def plot_learning_curve(df, device):
-    data_fracs = [0.01, 0.05, 0.1, 0.2, 0.5, 1.0]
-    results = []
-
-    for frac in data_fracs:
-        tr_loss, val_loss = run_experiment(frac, df, device=device)
-        print(f"Data frac {frac:.2f} → Train: {tr_loss:.4f} / Val: {val_loss:.4f}")
-        results.append((frac, tr_loss, val_loss))
-
-    fracs, tr_losses, val_losses = zip(*results)
-    plt.plot(fracs, tr_losses, label="Train Loss")
-    plt.plot(fracs, val_losses, label="Val Loss")
-    plt.xlabel("Training Data Fraction")
-    plt.ylabel("Loss")
-    plt.title("Learning Curve")
-    plt.legend()
-    plt.grid(True)
-    plt.show()
 
 def predict_latest_3months():
     import datetime as dt
@@ -1121,7 +1495,7 @@ def predict_latest_3months():
     rank_cols = [f"lane{l}_rank" for l in range(1, 7)]
     df_pred[rank_cols] = df_pred[rank_cols].fillna(7).astype("int32")
 
-    pred_ds = BoatRaceDataset(df_pred, mode="zscore")
+    pred_ds = BoatRaceDataset(df_pred)
     pred_loader = DataLoader(pred_ds, batch_size=1)
 
     model.eval()

@@ -1,4 +1,4 @@
-DB_NAME      := ver1_2
+DB_NAME      := ver2_3
 DB_USER      := keiichiro
 DB_HOST      := localhost
 
@@ -67,7 +67,7 @@ db_list:
 .PHONY: to_ipynb
 to_ipynb:
 	# Jupyter Notebookに変換
-	jupytext model/main2.py --to notebook
+	jupytext model/main3.py --to notebook
 
 .PHONY: tensorboard
 tensorboard:

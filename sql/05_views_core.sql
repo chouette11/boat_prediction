@@ -162,6 +162,34 @@ ORDER BY race_key,
          third_lane,
          source_file DESC;
 
+-- エントリー（racelist_entries） ---------------------------
+CREATE MATERIALIZED VIEW IF NOT EXISTS core.entries AS
+SELECT DISTINCT ON (race_key, lane)
+       core.f_race_key(race_date, race_no, stadium) AS race_key,
+       lane,
+       reg_no,
+       grade,
+       name,
+       branch,
+       birthplace,
+       age,
+       f_count,
+       l_count,
+       avg_st,
+       national_win,
+       national_2ren,
+       national_3ren,
+       local_win,
+       local_2ren,
+       local_3ren,
+       jcd,
+       place,
+       title,
+       day_label,
+       distance_m
+FROM raw.racelist_entries
+ORDER BY race_key, lane, source_file DESC;
+
 -- レーサー統計（コース別：走法＋率 を統合） -------------------
 CREATE MATERIALIZED VIEW IF NOT EXISTS core.racerstats_course AS
 SELECT
@@ -270,6 +298,7 @@ REFRESH MATERIALIZED VIEW core.races;
 REFRESH MATERIALIZED VIEW core.results;
 REFRESH MATERIALIZED VIEW core.weather;
 REFRESH MATERIALIZED VIEW core.odds3t;
+REFRESH MATERIALIZED VIEW core.entries;
 
 REFRESH MATERIALIZED VIEW core.racerstats_course;
 REFRESH MATERIALIZED VIEW core.racerstats_grade;

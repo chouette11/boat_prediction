@@ -215,6 +215,51 @@ FROM os
 ON CONFLICT DO NOTHING;
 
 ------------------------------------------------------------
+-- 4b) racelist_entries_staging → raw.racelist_entries
+------------------------------------------------------------
+DO $$
+BEGIN
+    ALTER TABLE raw.racelist_entries
+    ADD CONSTRAINT racelist_entries_unique UNIQUE (stadium, race_date, race_no, lane);
+EXCEPTION
+    WHEN duplicate_object THEN
+        RAISE NOTICE 'Constraint racelist_entries_unique already exists.';
+END
+$$;
+
+WITH re AS (
+    SELECT *,
+           (regexp_match(right(source_file, 100),
+                 'wakamatsu_racelist_[0-9]+_([0-9]{8})_([0-9]+)_entries\.csv$'))[1] AS yyyymmdd,
+           (regexp_match(right(source_file, 100),
+                 'wakamatsu_racelist_[0-9]+_([0-9]{8})_([0-9]+)_entries\.csv$'))[2] AS race_no_ex
+    FROM raw.racelist_entries_staging
+    WHERE right(source_file, 100) ~ 'wakamatsu_racelist_[0-9]+_[0-9]{8}_[0-9]+_entries\.csv$'
+)
+INSERT INTO raw.racelist_entries (
+    stadium, race_date, race_no, lane,
+    jcd, place, title, day_label, distance_m,
+    reg_no, grade, name, branch, birthplace, age,
+    weight_raw, f_count, l_count, avg_st,
+    national_win, national_2ren, national_3ren,
+    local_win, local_2ren, local_3ren,
+    source_file
+)
+SELECT
+    '若松',
+    to_date(yyyymmdd, 'YYYYMMDD'),
+    COALESCE(race_no::int, race_no_ex::int),
+    lane,
+    jcd, place, title, day_label, distance_m,
+    reg_no, grade, name, branch, birthplace, age,
+    weight_raw, f_count, l_count, avg_st,
+    national_win, national_2ren, national_3ren,
+    local_win, local_2ren, local_3ren,
+    source_file
+FROM re
+ON CONFLICT DO NOTHING;
+
+------------------------------------------------------------
 -- 5) racertech_staging → raw.racertech
 ------------------------------------------------------------
 DO $$

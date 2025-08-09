@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS raw.weather_staging (
     source_file        TEXT
 );
 
+
 CREATE TABLE IF NOT EXISTS raw.person_staging (
     boat_no         INT,
     reg_no          INT,
@@ -93,6 +94,45 @@ CREATE TABLE IF NOT EXISTS raw.odds3t_staging (
     third_lane      INT,
     odds            NUMERIC,
     source_file     TEXT
+);
+
+-- racelist（エントリー情報）取り込み用STAGING
+CREATE TABLE IF NOT EXISTS raw.racelist_entries_staging (
+    date_label       TEXT,         -- CSV: date (レース日、文字列のまま保持)
+    jcd              INT,          -- 場コード
+    place            TEXT,         -- 場名
+    title            TEXT,         -- 開催タイトル
+    day_label        TEXT,         -- 〇日目ラベル
+    distance_m       INT,          -- 距離(m)
+    race_no          INT,          -- CSV: rno
+    lane             INT,          -- 枠番
+    reg_no           INT,          -- 登番
+    grade            TEXT,         -- 級別
+    name             TEXT,         -- 選手名
+    branch           TEXT,         -- 支部
+    birthplace       TEXT,         -- 出身
+    age              INT,
+    weight_raw       TEXT,         -- CSV: weight_kg（補正前の文字列保持）
+    f_count          INT,          -- フライング回数
+    l_count          INT,          -- 出遅れ回数
+    avg_st           NUMERIC,      -- 平均ST
+    national_win     NUMERIC,      -- 全国勝率
+    national_2ren    NUMERIC,      -- 全国2連対率
+    national_3ren    NUMERIC,      -- 全国3連対率
+    local_win        NUMERIC,      -- 当地勝率
+    local_2ren       NUMERIC,
+    local_3ren       NUMERIC,
+    motor_no         INT,
+    motor_2ren       NUMERIC,
+    motor_3ren       NUMERIC,
+    boat_no          INT,
+    boat_2ren        NUMERIC,
+    boat_3ren        NUMERIC,
+    photo            TEXT,         -- CSV: photo_url
+    profile          TEXT,         -- CSV: profile_url
+    hayami_label     TEXT,         -- CSV: hayami（早見のテキスト）
+    hayami_href      TEXT,         -- CSV: hayami_href（早見リンク）
+    source_file      TEXT          -- 取り込み元ファイルパス
 );
 
 /*--- STAGING (レーサー統計テーブル) --------------------------*/
@@ -303,6 +343,35 @@ CREATE TABLE IF NOT EXISTS raw.odds3t (
     second_lane    INT  NOT NULL,
     third_lane     INT  NOT NULL,
     odds           NUMERIC,
+    source_file    TEXT
+);
+
+CREATE TABLE IF NOT EXISTS raw.racelist_entries (
+    stadium        TEXT NOT NULL DEFAULT '若松',
+    race_date      DATE NOT NULL,
+    race_no        INT  NOT NULL,
+    lane           INT  NOT NULL,
+    jcd            INT,
+    place          TEXT,
+    title          TEXT,
+    day_label      TEXT,
+    distance_m     INT,
+    reg_no         INT,
+    grade          TEXT,
+    name           TEXT,
+    branch         TEXT,
+    birthplace     TEXT,
+    age            INT,
+    weight_raw     TEXT,
+    f_count        INT,
+    l_count        INT,
+    avg_st         NUMERIC,
+    national_win   NUMERIC,
+    national_2ren  NUMERIC,
+    national_3ren  NUMERIC,
+    local_win      NUMERIC,
+    local_2ren     NUMERIC,
+    local_3ren     NUMERIC,
     source_file    TEXT
 );
 

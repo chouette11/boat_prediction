@@ -161,6 +161,7 @@ def _load_weather(engine, path: str) -> None:
 # 3.5 *_person.csv → raw.person_staging
 # ---------------------------------------------------------------------------
 
+
 def _load_person(engine, path: str) -> None:
     df = pd.read_csv(path)
 
@@ -189,6 +190,89 @@ def _load_person(engine, path: str) -> None:
 
     df.to_sql(
         "person_staging",
+        con=engine,
+        schema="raw",
+        if_exists="append",
+        index=False,
+        method="multi",
+    )
+
+# ---------------------------------------------------------------------------
+# 3.65 *_entries.csv → raw.racelist_entries_staging
+# ---------------------------------------------------------------------------
+
+def _load_racelist_entries(engine, path: str) -> None:
+    """
+    Load racelist_entries CSV into raw.racelist_entries_staging.
+    """
+    import pandas as pd
+    from pathlib import Path
+    p = Path(path)
+    df = pd.read_csv(p)
+
+    # Map CSV columns to staging schema
+    rename_map = {
+        "date": "date_label",
+        "rno": "race_no",
+        "weight_kg": "weight_raw",
+        "avg_ST": "avg_st",
+        "national_2ren": "national_2ren",
+        "national_3ren": "national_3ren",
+        "local_2ren": "local_2ren",
+        "local_3ren": "local_3ren",
+        "motor_2ren": "motor_2ren",
+        "motor_3ren": "motor_3ren",
+        "boat_2ren": "boat_2ren",
+        "boat_3ren": "boat_3ren",
+        "photo_url": "photo",
+        "profile_url": "profile",
+        "hayami": "hayami_label",
+        "hayami_href": "hayami_href",
+    }
+    # Only rename if present
+    df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
+
+    # All columns in raw.racelist_entries_staging
+    required_cols = [
+        "date_label", "jcd", "place", "title", "day_label", "distance_m",
+        "race_no", "lane", "reg_no", "grade", "name", "branch", "birthplace",
+        "age", "weight_raw", "F_count", "L_count", "avg_st", "national_win",
+        "national_2ren", "national_3ren", "local_win", "local_2ren", "local_3ren",
+        "motor_no", "motor_2ren", "motor_3ren", "boat_no", "boat_2ren", "boat_3ren",
+        "photo", "profile", "hayami_label", "hayami_href", "source_file"
+    ]
+    for col in required_cols:
+        if col not in df.columns:
+            df[col] = pd.NA
+
+    # Type coercion
+    int_cols = [
+        "jcd", "distance_m", "race_no", "lane", "reg_no", "age",
+        "F_count", "L_count", "motor_no", "boat_no"
+    ]
+    float_cols = [
+        "avg_st", "national_win", "national_2ren", "national_3ren",
+        "local_win", "local_2ren", "local_3ren",
+        "motor_2ren", "motor_3ren", "boat_2ren", "boat_3ren"
+    ]
+    # Coerce int columns
+    for col in int_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
+    # Coerce float columns
+    for col in float_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # source_file default
+    if "source_file" not in df.columns or df["source_file"].isna().all():
+        df["source_file"] = str(p)
+
+    # Only keep columns in required_cols (and in that order)
+    df = df[[col for col in required_cols if col in df.columns]]
+
+    df.to_sql(
+        "racelist_entries_staging",
         con=engine,
         schema="raw",
         if_exists="append",
@@ -619,6 +703,7 @@ _LOADERS = {
     "racercourse": ("*_tRacerCourse*.csv", _load_racercourse),
     "racerboatcourse": ("*_tRacerBoatCourse*.csv", _load_racerboatcourse),
     "racerboat": ("*_tRacerBoat*.csv", _load_racerboat),
+    "racelist_entries": ("*_entries.csv", _load_racelist_entries),
 }
 
 # ---------------------------------------------------------------------------
@@ -645,6 +730,7 @@ def main() -> None:
         "racerresult2": Path(os.getenv("CSV_DIR_RACERRESULT2", "download/person_record_csv")),
         "racercourse": Path(os.getenv("CSV_DIR_RACERCOURSE", "download/person_record_csv")),
         "racerboatcourse": Path(os.getenv("CSV_DIR_RACERBOATCOURSE", "download/person_record_csv")),
+        "racelist_entries": Path(os.getenv("CSV_DIR_RACELIST_ENTRIES", "download/wakamatsu_off_racelist_csv")),
     }
 
     user = os.getenv("PGUSER", "keiichiro")
@@ -676,6 +762,46 @@ def main() -> None:
 
     print("✔ Staging import complete.")
 
+def predict_main() -> None:
+    from dotenv import load_dotenv
+    load_dotenv(override=True)
+    
+    csv_root = {
+        "beforeinfo": Path(os.getenv("CSV_DIR_BEFOREINFO", "download/wakamatsu_off_beforeinfo_pred_csv")),
+        "weather": Path(os.getenv("CSV_DIR_BEFOREINFO", "download/wakamatsu_off_beforeinfo_pred_csv")),
+        # "racelist_entries": Path(os.getenv("CSV_DIR_RACELIST_ENTRIES", "download/wakamatsu_off_racelist_pred_csv")),
+    }
+
+    user = os.getenv("PGUSER", "keiichiro")
+    host = os.getenv("PGHOST", "localhost")
+    port = os.getenv("PGPORT", "5432")
+    database = os.getenv("PGDATABASE", "ver1_0")
+
+    dsn = f"postgresql://{user}@{host}:{port}/{database}"
+    engine = create_engine(dsn)
+
+    for kind, path in csv_root.items():
+        base_kind = kind.removesuffix("_2")  # 結果: "results2"  (末尾が "_2" ではないので変化なし)
+        print(base_kind)
+        if base_kind not in _LOADERS:
+            print(f"⚠ no loader for {base_kind}")
+            continue
+
+        pattern, loader = _LOADERS[base_kind]
+
+        if not path.is_dir():
+            print(f"❌ {path} not found", file=sys.stderr)
+            continue
+
+        files = sorted(path.glob(pattern))
+        print(f"{kind}: {len(files)} files in {path}")
+        for f in files:
+            print(f"  loading {f.name}")
+            loader(engine, str(f))
+
+    print("✔ Staging import complete.")
+
+
 def loader_test() -> None:
     """Test loader functions with a specific file."""
     from dotenv import load_dotenv
@@ -692,5 +818,6 @@ def loader_test() -> None:
     load_odds3t(engine, "download/wakamatsu_off_odds3t_csv/wakamatsu_odds3t_20_20250717_10_odds_matrix.csv")
 
 if __name__ == "__main__":
-    main()
+    # main()
+    predict_main()  # Uncomment to run the prediction loader
     # loader_test()  # Uncomment to test a specific loader function

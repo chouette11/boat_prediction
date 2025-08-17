@@ -7,3 +7,5 @@ diff.patch
 *.pt
 events.out.*
 *.pyc
+download/lzh/
+download/txt/

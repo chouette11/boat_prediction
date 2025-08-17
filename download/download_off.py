@@ -1,47 +1,151 @@
 import os
 import time
+import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
-def download_off(start_ymd: str, days: int = 3, interval_sec: int = 1, kind: str = "result", is_pred: bool = False):
-    """
-    指定した年月から開始して、指定月数分のHTMLを取得（インターバル付き）
+jcd_to_en = {
+    "01": "Kiryu",
+    "02": "Toda",
+    "03": "Edogawa",
+    "04": "Heiwajima",
+    "05": "Tamagawa",
+    "06": "Hamanako",
+    "07": "Gamagori",
+    "08": "Tokoname",
+    "09": "Tsu",
+    "10": "Mikuni",
+    "11": "Biwako",
+    "12": "Suminoe",
+    "13": "Amagasaki",
+    "14": "Naruto",
+    "15": "Marugame",
+    "16": "Kojima",
+    "17": "Miyajima",
+    "18": "Tokuyama",
+    "19": "Shimonoseki",
+    "20": "Wakamatsu",
+    "21": "Ashiya",
+    "22": "Fukuoka",
+    "23": "Karatsu",
+    "24": "Omura"
+}
 
-    :param start_ym: 開始年月（例：'202407'）
-    :param months: 取得したい月数（例：3なら3か月分）
-    :param interval_sec: 各リクエストの待機秒数（例：3秒）
+def _make_session():
+    s = requests.Session()
+    retry = Retry(
+        total=3,
+        backoff_factor=0.5,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"],
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=100, pool_maxsize=100)
+    s.mount("https://", adapter)
+    s.headers.update({
+        "User-Agent": "Mozilla/5.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Connection": "keep-alive",
+    })
+    return s
+
+def _list_existing_rnos(session, ymd, jcd):
     """
-    base_url = f"https://boatrace.jp/owpc/pc/race/{kind}?jcd=20"
+    raceindex を見て、その日に実在する R のみを返す（1..12 の中から抽出）
+    """
+    url = f"https://boatrace.jp/owpc/pc/race/raceindex?hd={ymd}&jcd={jcd}"
+    try:
+        r = session.get(url, timeout=(5, 15))
+        if r.status_code != 200:
+            return []
+        # 軽量に rno=1..12 の出現を拾う
+        html = r.text
+        rnos = set(int(m) for m in re.findall(r"rno=(\d{1,2})", html))
+        return sorted([r for r in rnos if 1 <= r <= 12])
+    except requests.RequestException:
+        return []
+
+def _fetch_and_save(session, kind, ymd, jcd, en, rno, out_root="download", overwrite=False):
+    base_url = f"https://boatrace.jp/owpc/pc/race/{kind}"
+    url = f"{base_url}?jcd={jcd}&hd={ymd}&rno={rno}"
+    dir_name = os.path.join(out_root, f"{en.lower()}_off_{kind}_html")
+    os.makedirs(dir_name, exist_ok=True)
+    file_name = f"{en.lower()}_{kind}_{jcd}_{ymd}_{rno}.html"
+    path = os.path.join(dir_name, file_name)
+
+    if (not overwrite) and os.path.exists(path):
+        return ("skip", path)
+
+    try:
+        resp = session.get(url, timeout=(5, 30))
+        if resp.status_code == 200 and "<html" in resp.text.lower():
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(resp.text)
+            return ("ok", path)
+        return ("bad", f"status={resp.status_code}")
+    except Exception as e:
+        return ("err", str(e))
+
+def download_off(start_ymd: str, days: int = 3, interval_sec: int = 1, kind: str = "result",
+                 max_workers: int = 8, out_root: str = "download", overwrite: bool = False, verbose: bool = False):
+    
+    base_url = f"https://boatrace.jp/owpc/pc/race/{kind}"
     current_date = datetime.strptime(start_ymd, "%Y%m%d")
+    session = _make_session()
 
     for i in range(days):
-        target_ymd = current_date.strftime("%Y%m%d")
-        print(target_ymd)
-        target_url = f"{base_url}&hd={target_ymd}"
-        for j in range(2, 3):
-            target_url_no = f"{target_url}&rno={j}"
-            print(f"▶ 取得中: {target_url_no} ...")
-            try:
-                response = requests.get(target_url_no, timeout=(5, 30))
-                if response.status_code == 200 and "<html" in response.text.lower():
-                    file_name = f"wakamatsu_{kind}_20_{target_ymd}_{j}.html"
-                    dir_name = f"download/wakamatsu_off_{kind}_html"
-                    if is_pred:
-                        dir_name = f"download/wakamatsu_off_{kind}_pred_html"
-                    file_path = os.path.join(dir_name, file_name)
-                    with open(file_path, "w", encoding="utf-8") as f:
-                        f.write(response.text)
-                    print(f"✅ 成功: {file_name} を保存しました。")
-                else:
-                    print(f"⚠️ 失敗: ステータスコード {response.status_code} または HTML未検出")
+        ymd = current_date.strftime("%Y%m%d")
+        day_tasks = []
 
-            except requests.RequestException as e:
-                print(f"❌ エラー: {e}")
+        # 開催のある場とRだけを列挙
+        for jcd, en in jcd_to_en.items():
+            rnos = _list_existing_rnos(session, ymd, jcd)
+            if not rnos:
+                if verbose:
+                    print(f"[{ymd}] jcd={jcd} ({en}) 開催なし/取得対象なし")
+                continue
+            for rno in rnos:
+                day_tasks.append((jcd, en, rno))
 
-            # インターバル
-            if i < days - 1:
-                print(f"⏳ {interval_sec}秒待機中...\n")
-                time.sleep(interval_sec)
+        if verbose:
+            print(f"\n==== {ymd} ==== 取得タスク数: {len(day_tasks)}")
 
+        if not day_tasks:
             # 次の日へ
             current_date += timedelta(days=1)
+            if i < days - 1 and interval_sec > 0:
+                time.sleep(interval_sec)
+            continue
+
+        # I/O バウンド → スレッドで並列化
+        saved = skipped = errors = 0
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futs = [ex.submit(_fetch_and_save, session, kind, ymd, jcd, en, rno, out_root, overwrite)
+                    for (jcd, en, rno) in day_tasks]
+            for fut in as_completed(futs):
+                status, info = fut.result()
+                if status == "ok":
+                    saved += 1
+                    if verbose:
+                        print(f"✅ {info}")
+                elif status == "skip":
+                    skipped += 1
+                    if verbose:
+                        print(f"⏭  {info}")
+                else:
+                    errors += 1
+                    if verbose:
+                        print(f"⚠️ {status}: {info}")
+
+        print(f"[{ymd}] done. saved={saved}, skip={skipped}, err={errors}")
+
+        # 次の日へ
+        current_date += timedelta(days=1)
+        if i < days - 1 and interval_sec > 0:
+            time.sleep(interval_sec)
+
+if __name__ == "__main__":
+    download_off("20230101", days=365, interval_sec=0, kind="odds3t", max_workers=8, verbose=False)

@@ -199,23 +199,31 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS core.payout3t AS
 WITH base AS (
   SELECT
     race_key,
-    -- 全角数字→半角へ正規化後に非数字除去（例：１－２－３ → 123）
-    regexp_replace(translate(combination, '０１２３４５６７８９', '0123456789'), '\\D', '', 'g') AS comb,
+    -- 全角数字→半角へ正規化後、「数字以外」をすべて除去
+    regexp_replace(
+      translate(combination, '０１２３４５６７８９', '0123456789'),
+      '[^0-9]+', '', 'g'
+    ) AS comb,
     payout_yen,
     popularity_rank
   FROM core.payouts
   -- ラベルは環境により半角/全角が混在するため両方許容
   WHERE bet_type IN ('3連単','３連単')
+),
+clean AS (
+  -- 1〜6 の数字がちょうど3桁だけ残ったものに限定（返還/特払などを除外）
+  SELECT race_key, comb, payout_yen, popularity_rank
+  FROM base
+  WHERE comb ~ '^[1-6]{3}$'
 )
 SELECT DISTINCT ON (race_key, first_lane, second_lane, third_lane)
   race_key,
-  substring(comb from 1 for 1)::int AS first_lane,
-  substring(comb from 2 for 1)::int AS second_lane,
-  substring(comb from 3 for 1)::int AS third_lane,
+  substring(comb, 1, 1)::int AS first_lane,
+  substring(comb, 2, 1)::int AS second_lane,
+  substring(comb, 3, 1)::int AS third_lane,
   payout_yen,
   popularity_rank
-FROM base
-WHERE length(comb) >= 3
+FROM clean
 ORDER BY race_key, first_lane, second_lane, third_lane;
 
 

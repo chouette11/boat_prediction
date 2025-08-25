@@ -7,7 +7,7 @@
 
 
 
-# In[18]:
+# In[70]:
 
 
 get_ipython().run_line_magic('load_ext', 'autoreload')
@@ -98,7 +98,7 @@ register_feature(FeatureDef("wind_sin", _wind_sin, deps=["wind_dir_deg"]))
 register_feature(FeatureDef("wind_cos", _wind_cos, deps=["wind_dir_deg"]))
 
 
-# In[19]:
+# In[71]:
 
 
 import nbformat
@@ -114,7 +114,7 @@ with open("main4.py", "w", encoding="utf-8") as f:
     f.write(source)
 
 
-# In[20]:
+# In[72]:
 
 
 load_dotenv(override=True)
@@ -141,7 +141,7 @@ result_df = pd.read_sql("""
 print(f"Loaded {len(result_df)} rows from the database.")
 
 
-# In[21]:
+# In[ ]:
 
 
 # --- 追加特徴量（Feature Registry 経由） ---
@@ -156,7 +156,6 @@ for lane in range(1, 7):
       )
       exclude.append(f"lane{lane}_bf_st_time")
       exclude.append(f"lane{lane}_weight")
-      exclude.append(f"lane{lane}_age")
 
 # exclude.append("water_temp")
 # exclude.append("air_temp")
@@ -197,7 +196,7 @@ scaler_filename = "artifacts/wind_scaler.pkl"
 joblib.dump(scaler, scaler_filename)
 
 
-# In[22]:
+# In[74]:
 
 
 def encode(col):
@@ -209,7 +208,7 @@ venue2id = encode("venue")
 # race_type2id = encode("race_type")
 
 
-# In[23]:
+# In[75]:
 
 
 # ============================================================
@@ -247,7 +246,7 @@ TEMPERATURE   = 0.80   # logits are divided by T at inference
 LAMBDA_WIN = 1.0        # weight for winner‑BCE loss
 
 
-# In[24]:
+# In[76]:
 
 
 def pl_nll(scores: torch.Tensor, ranks: torch.Tensor, reduce: bool = True) -> torch.Tensor:
@@ -286,7 +285,7 @@ ranks  = torch.tensor([[1, 2, 3, 4, 5, 6]], dtype=torch.int64)    # lane0 が 1 
 print("pl_nll should be ~0 :", pl_nll(scores, ranks).item())
 
 
-# In[25]:
+# In[77]:
 
 
 result_df["race_date"] = pd.to_datetime(result_df["race_date"]).dt.date
@@ -310,61 +309,7 @@ model = DualHeadRanker(boat_in=boat_dim).to(device)
 opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=5e-5)
 
 
-# In[36]:
-
-
-# === ここを学習後に貼る（model, ds_val, device が存在する前提） ===
-from torch.utils.data import DataLoader
-
-def _equip_index_ranges(ds):
-    off = 1 + int(ds.has_bf_st) + int(ds.has_fs) + int(ds.has_weight) \
-          + (2 if ds.has_course else 0) \
-          + int(ds.has_first_rate) + int(ds.has_two_rate) + int(ds.has_three_rate)
-    rng = {}
-    if ds.has_motor_rates:
-        rng["motor_rel"]  = list(range(off, off+3)); off += 3
-    if ds.has_boat_rates:
-        rng["boat_rel"]   = list(range(off, off+3)); off += 3
-    if ds.has_motor_rates:
-        rng["motor_rank"] = list(range(off, off+3)); off += 3
-    if ds.has_boat_rates:
-        rng["boat_rank"]  = list(range(off, off+3)); off += 3
-    return rng
-
-class _ShuffledEquipDS(torch.utils.data.Dataset):
-    def __init__(self, base, equip_cols):
-        self.base, self.equip_cols = base, equip_cols
-    def __len__(self): return len(self.base)
-    def __getitem__(self, idx):
-        ctx, boats, lane_ids, ranks, st_true, st_mask = self.base[idx]
-        perm = torch.randperm(6)
-        b2 = boats.clone()
-        b2[:, self.equip_cols] = boats[perm][:, self.equip_cols]
-        return ctx, b2, lane_ids, ranks, st_true, st_mask
-
-def _val_nll(model, ds, device):
-    model.eval()
-    ld = DataLoader(ds, batch_size=512)
-    tot = 0.0
-    with torch.no_grad():
-        for ctx, boats, lane_ids, ranks, *_ in ld:
-            ctx, boats, lane_ids, ranks = ctx.to(device), boats.to(device), lane_ids.to(device), ranks.to(device)
-            _, scores, _ = model(ctx, boats, lane_ids)
-            tot += pl_nll(scores, ranks).item() * len(ctx)
-    return tot / len(ds)
-
-base = _val_nll(model, ds_val, device)
-
-idx = _equip_index_ranges(ds_val)
-equip_cols = sorted(set(idx.get("motor_rel", []) + idx.get("boat_rel", []) +
-                        idx.get("motor_rank", []) + idx.get("boat_rank", [])))
-ds_shuf = _ShuffledEquipDS(ds_val, equip_cols)
-shuf = _val_nll(model, ds_shuf, device)
-
-print(f"[check] base val_nll={base:.4f}  shuf(equip)={shuf:.4f}  Δ={shuf-base:+.4f}")
-
-
-# In[26]:
+# In[78]:
 
 
 def evaluate_model(model, dataset, device):
@@ -472,7 +417,7 @@ def evaluate_model(model, dataset, device):
 #     print("[diag]   ► finished quick diagnostics\n")
 
 
-# In[27]:
+# In[79]:
 
 
 # ---------------------------------------------------------------------
@@ -705,7 +650,7 @@ torch.save(model.state_dict(), model_path)
 print(f"Model saved to {model_path}")
 
 
-# In[28]:
+# In[80]:
 
 
 # ---- Monkey‑patch ROIAnalyzer so it uses BoatRaceDataset2 (MTL) ----------
@@ -829,7 +774,7 @@ df_trifecta_met_hit.to_csv("artifacts/metrics_trifecta_hit.csv", index=False)
 # )
 
 
-# In[29]:
+# In[81]:
 
 
 # --- 予測でも「自信度」と「正解三連単の順位」を評価し、CSV に記録 ---
@@ -862,7 +807,7 @@ all_scores = torch.cat(all_scores, dim=0)   # (N,6)
 all_ranks  = torch.cat(all_ranks,  dim=0)   # (N,6)
 
 
-# In[31]:
+# In[82]:
 
 
 # --------------------------------------------------------------------------
@@ -989,7 +934,7 @@ print(f"[saved] {imp_path}")
 # print(f"[saved] {abl_path}")
 
 
-# In[32]:
+# In[83]:
 
 
 # all_ranksとall_scoresを結合したdfに変換
@@ -1102,7 +1047,7 @@ for n in range(1, 6):
 
 
 
-# In[33]:
+# In[84]:
 
 
 def top1_accuracy(scores: torch.Tensor, ranks: torch.Tensor) -> float:
@@ -1295,7 +1240,7 @@ with open(metrics_path, "a", newline="") as f:
 print(f"[saved] {metrics_path}")
 
 
-# In[34]:
+# In[85]:
 
 
 # === 条件別ヒット率/ROI 分析（修正版） =========================
@@ -1497,7 +1442,7 @@ else:
 # ============================================================
 
 
-# In[35]:
+# In[86]:
 
 
 # prediction

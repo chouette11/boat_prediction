@@ -7,7 +7,6 @@
 -- ===== Pre-requisites: schema & helper function ============================
 CREATE SCHEMA IF NOT EXISTS core;
 
-
 -- official venue number resolver (01–24)
 CREATE OR REPLACE FUNCTION core.f_official_venue_no(p_stadium text)
 RETURNS text
@@ -94,6 +93,8 @@ WITH base AS (
         core.f_race_key(e.event_date, r.race_no, v.name) AS race_key,
         rs.lane,
         rs.reg_no                                       AS racer_id,
+        rs.motor_no                                     AS motor_no,
+        rs.boat_no                                      AS boat_no,
         rs.tenji_time                                   AS exh_time,
         rs.course_entry                                 AS course,
         rs.start_timing,
@@ -116,6 +117,8 @@ SELECT DISTINCT ON (b.race_key, b.lane)
        b.race_key,
        b.lane,
        b.racer_id,
+       b.motor_no,
+       b.boat_no,
        p.weight_kg                                 AS weight,
        b.exh_time,
        NULL::NUMERIC                                AS tilt_deg,
@@ -226,6 +229,22 @@ SELECT DISTINCT ON (race_key, first_lane, second_lane, third_lane)
 FROM clean
 ORDER BY race_key, first_lane, second_lane, third_lane;
 
+-- 次回開始日が未入力でも LEAD で補完するビュー
+-- raw.equip_cycles を core 層に公開（VIEW）
+CREATE OR REPLACE VIEW core.equip_cycles AS
+SELECT * FROM raw.equip_cycles;
+
+CREATE OR REPLACE VIEW core.v_equip_cycles AS
+SELECT
+    stadium,
+    equip_type,
+    start_date,
+    COALESCE(
+      next_start_date,
+      LEAD(start_date) OVER (PARTITION BY stadium, equip_type ORDER BY start_date),
+      DATE '9999-12-31'
+    ) AS next_start_date
+FROM core.equip_cycles;
 
 -- Indexes for payout join performance
 CREATE INDEX IF NOT EXISTS idx_core_payouts_key_type_comb

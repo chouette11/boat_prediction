@@ -8,9 +8,6 @@ SET parallel_leader_participation = on;
 CREATE INDEX IF NOT EXISTS idx_core_rsc_reg_course
   ON core.racerstats_course (reg_no, course);
 
--- Indexes to speed joins and filters on materialized outputs
-CREATE INDEX IF NOT EXISTS idx_feat_filtered_course_reg_course
-  ON feat.filtered_course (reg_no, course);
 
 -- Bottleneck profiling: use EXPLAIN ANALYZE to identify slow steps
 -- Example: run this in psql to analyze the train_features3 view
@@ -47,6 +44,7 @@ JOIN core.races    cr USING (race_key)
 ORDER BY b.race_key, b.lane;
 
 /* ---------- filtered_course マテリアライズドビュー定義を追加 ---------- */
+DROP MATERIALIZED VIEW IF EXISTS feat.filtered_course CASCADE;
 CREATE MATERIALIZED VIEW IF NOT EXISTS feat.filtered_course AS
 SELECT
     b.racer_id AS reg_no,
@@ -58,8 +56,14 @@ SELECT
     SUM(CASE WHEN r.rank <= 3 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*),0) AS three_rate
 FROM core.boat_info b
 JOIN core.results r ON b.race_key = r.race_key AND b.lane = r.lane
+JOIN core.races cr ON b.race_key = cr.race_key
+WHERE cr.stadium = '若 松'
 GROUP BY b.racer_id, b.course
 WITH NO DATA;
+
+-- Index to speed joins & filters on filtered_course (after MV exists)
+CREATE INDEX IF NOT EXISTS idx_feat_filtered_course_reg_course
+  ON feat.filtered_course (reg_no, course);
 
 /* ---------- 学習用特徴量（feat.train_features） ---------- */
 CREATE MATERIALIZED VIEW IF NOT EXISTS feat.train_features2 AS
@@ -192,6 +196,7 @@ LEFT JOIN feat.filtered_course fc
 GROUP BY l.race_key
 WITH NO DATA;
 
+DROP MATERIALIZED VIEW IF EXISTS feat.train_features3 CASCADE;
 CREATE MATERIALIZED VIEW IF NOT EXISTS feat.train_features3 AS
 SELECT
     tf.*,
@@ -202,10 +207,11 @@ SELECT
     ls.lane5_starts, ls.lane5_firsts, ls.lane5_first_rate, ls.lane5_two_rate, ls.lane5_three_rate,
     ls.lane6_starts, ls.lane6_firsts, ls.lane6_first_rate, ls.lane6_two_rate, ls.lane6_three_rate
 FROM feat.train_features2 tf
-LEFT JOIN feat.tf2_lane_stats ls USING (race_key)
+WHERE tf.venue = '若 松'
 WITH NO DATA;
 
 -- /* ---------- 評価用特徴量（feat.eval_features） ---------- */
+DROP MATERIALIZED VIEW IF EXISTS feat.eval_features3 CASCADE;
 CREATE MATERIALIZED VIEW IF NOT EXISTS feat.eval_features3 AS
 WITH ord AS (
   SELECT
@@ -227,7 +233,10 @@ pos AS (
 )
 SELECT
     tf.*,
-    p.payout_yen       AS trifecta_payout_yen,
+    pos.first_lane,
+    pos.second_lane,
+    pos.third_lane,
+    (p.payout_yen / 100.0)       AS trifecta_odds,
     p.popularity_rank  AS trifecta_popularity_rank
 FROM feat.train_features3 tf
 LEFT JOIN pos USING (race_key)
@@ -287,7 +296,5 @@ CREATE INDEX IF NOT EXISTS idx_feat_tf2_lane6
 CREATE INDEX IF NOT EXISTS idx_feat_tf3_race_date
   ON feat.train_features3 (race_date);
 
-CREATE INDEX IF NOT EXISTS idx_feat_tf2_lane_stats_race_key
-  ON feat.tf2_lane_stats (race_key);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_feat_tf2_lane_stats_race_key
   ON feat.tf2_lane_stats (race_key);

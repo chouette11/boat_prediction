@@ -415,7 +415,7 @@ SELECT
     pos.third_lane,
     (p.payout_yen / 100.0)       AS trifecta_odds,
     p.popularity_rank  AS trifecta_popularity_rank
-FROM feat.train_features3 tf
+FROM feat.train_features_base tf
 LEFT JOIN pos USING (race_key)
 LEFT JOIN core.payout3t p
   ON p.race_key = tf.race_key

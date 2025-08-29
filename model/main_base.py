@@ -7,7 +7,15 @@
 
 
 
-# In[35]:
+# In[ ]:
+
+
+
+
+
+
+
+# In[ ]:
 
 
 get_ipython().run_line_magic('load_ext', 'autoreload')
@@ -99,7 +107,7 @@ register_feature(FeatureDef("wind_sin", _wind_sin, deps=["wind_dir_deg"]))
 register_feature(FeatureDef("wind_cos", _wind_cos, deps=["wind_dir_deg"]))
 
 
-# In[36]:
+# In[ ]:
 
 
 import nbformat
@@ -115,7 +123,7 @@ with open("main_base.py", "w", encoding="utf-8") as f:
     f.write(source)
 
 
-# In[37]:
+# In[ ]:
 
 
 load_dotenv(override=True)
@@ -142,14 +150,13 @@ result_df = pd.read_sql("""
 print(f"Loaded {len(result_df)} rows from the database.")
 
 
-# In[38]:
+# In[ ]:
 
 
 result_df = apply_features(result_df)
 # 重要列の drop バグ修正：bf_course / bf_st_time / weight は保持する
 # 重要列の drop バグ修正：bf_course / bf_st_time / weight は保持する
-exclude = []
-
+exclude = []  # ← 重要列はドロップしない（必要があればここに追加）
 for lane in range(1, 7):
       # --- 対象列を決める（ターゲット & キー列は除外） ---
       exclude.append(
@@ -157,9 +164,6 @@ for lane in range(1, 7):
       )
       exclude.append(f"lane{lane}_bf_st_time")
       exclude.append(f"lane{lane}_weight")
-
-# exclude.append("water_temp")
-# exclude.append("air_temp")
 
 result_df.drop(columns=exclude, inplace=True, errors="ignore")
 
@@ -195,7 +199,7 @@ scaler_filename = "artifacts/wind_scaler.pkl"
 joblib.dump(scaler, scaler_filename)
 
 
-# In[39]:
+# In[ ]:
 
 
 def encode(col):
@@ -207,7 +211,7 @@ venue2id = encode("venue")
 # race_type2id = encode("race_type")
 
 
-# In[40]:
+# In[ ]:
 
 
 # ============================================================
@@ -245,7 +249,7 @@ TEMPERATURE   = 0.80   # logits are divided by T at inference
 LAMBDA_WIN = 1.0        # weight for winner‑BCE loss
 
 
-# In[41]:
+# In[ ]:
 
 
 def pl_nll(scores: torch.Tensor, ranks: torch.Tensor, reduce: bool = True) -> torch.Tensor:
@@ -284,14 +288,14 @@ ranks  = torch.tensor([[1, 2, 3, 4, 5, 6]], dtype=torch.int64)    # lane0 が 1 
 print("pl_nll should be ~0 :", pl_nll(scores, ranks).item())
 
 
-# In[42]:
+# In[ ]:
 
 
 result_df["race_date"] = pd.to_datetime(result_df["race_date"]).dt.date
 latest_date = result_df["race_date"].max()
 cutoff = latest_date - dt.timedelta(days=90)
 
-mode = "diff"  # "raw", "log", "zscore" も試せる
+mode = "zscore"  # レース内zスコア運用
 ds_train = BoatRaceDatasetBase(result_df[result_df["race_date"] <  cutoff])
 ds_val   = BoatRaceDatasetBase(result_df[result_df["race_date"] >= cutoff])
 
@@ -308,7 +312,7 @@ model = DualHeadRanker(boat_in=boat_dim).to(device)
 opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=5e-5)
 
 
-# In[43]:
+# In[ ]:
 
 
 def evaluate_model(model, dataset, device):
@@ -416,7 +420,7 @@ def evaluate_model(model, dataset, device):
 #     print("[diag]   ► finished quick diagnostics\n")
 
 
-# In[44]:
+# In[ ]:
 
 
 # ---------------------------------------------------------------------
@@ -649,7 +653,7 @@ torch.save(model.state_dict(), model_path)
 print(f"Model saved to {model_path}")
 
 
-# In[45]:
+# In[ ]:
 
 
 # ---- Monkey‑patch ROIAnalyzer so it uses BoatRaceDataset2 (MTL) ----------
@@ -774,7 +778,7 @@ df_trifecta_met_hit.to_csv("artifacts/metrics_trifecta_hit.csv", index=False)
 # )
 
 
-# In[46]:
+# In[ ]:
 
 
 # --- 予測でも「自信度」と「正解三連単の順位」を評価し、CSV に記録 ---
@@ -807,7 +811,7 @@ all_scores = torch.cat(all_scores, dim=0)   # (N,6)
 all_ranks  = torch.cat(all_ranks,  dim=0)   # (N,6)
 
 
-# In[47]:
+# In[ ]:
 
 
 # --------------------------------------------------------------------------
@@ -992,7 +996,7 @@ pd.Series(res).to_csv("artifacts/group_perm_pattern.csv")
 # print(f"[saved] {abl_path}")
 
 
-# In[48]:
+# In[ ]:
 
 
 # all_ranksとall_scoresを結合したdfに変換
@@ -1105,7 +1109,7 @@ for n in range(1, 6):
 
 
 
-# In[52]:
+# In[ ]:
 
 
 def top1_accuracy(scores: torch.Tensor, ranks: torch.Tensor) -> float:
@@ -1346,7 +1350,7 @@ with open(metrics_path, "a", newline="") as f:
 print(f"[saved] {metrics_path}")
 
 
-# In[50]:
+# In[ ]:
 
 
 # === 条件別ヒット率/ROI 分析（修正版） =========================
@@ -1548,7 +1552,7 @@ else:
 # ============================================================
 
 
-# In[51]:
+# In[ ]:
 
 
 # prediction

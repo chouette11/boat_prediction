@@ -19,7 +19,7 @@ class BoatRaceDatasetBase(Dataset):
         (first_rate, two_rate, three_rate)
     → len = 1–9 depending on available columns
 
-    展示：相対差分 / 重量・環境：Z-score / 風向：raw
+    展示・bf_ST・率系：同レース内Z-score / 重量・環境：グローバルZ / 風向：raw
     """
 
     def __init__(self, frame: pd.DataFrame):
@@ -106,32 +106,38 @@ class BoatRaceDatasetBase(Dataset):
         raw_ranks = [int(r[f"lane{lane}_rank"]) for lane in range(1, 7)]
         lane_ids  = list(range(6))
 
+        # --- race-wise stats for Z-normalization (avoid div-by-zero with 1e-6) ---
+        mean_exh = float(np.mean(exh_times));   std_exh = float(np.std(exh_times));   std_exh = std_exh if std_exh > 1e-6 else 1.0
+        if self.has_bf_st:
+            mean_bf_st = float(np.mean(bf_st_times)); std_bf_st = float(np.std(bf_st_times)); std_bf_st = std_bf_st if std_bf_st > 1e-6 else 1.0
+        if self.has_first_rate:
+            mean_f = float(np.mean(first_rates));   std_f = float(np.std(first_rates));   std_f = std_f if std_f > 1e-6 else 1.0
+        if self.has_two_rate:
+            mean_t = float(np.mean(two_rates));     std_t = float(np.std(two_rates));     std_t = std_t if std_t > 1e-6 else 1.0
+        if self.has_three_rate:
+            mean_th = float(np.mean(three_rates));  std_th = float(np.std(three_rates));  std_th = std_th if std_th > 1e-6 else 1.0
+
         boats = []
         for i in range(6):
-            mean_exh = np.mean(exh_times)
-            if self.has_bf_st:
-                mean_bf_st = np.mean(bf_st_times)
-            if self.has_weight:
-                mean_wt = np.mean(weights)
-
-            # --- core relative / zscore features --------------------
-            feat = [exh_times[i] - mean_exh]
+            # --- core features (race-wise Z for per-lane; global Z for weight) ---
+            feat = [ (exh_times[i] - mean_exh) / std_exh ]
 
             if self.has_bf_st:
-                feat.append(bf_st_times[i] - mean_bf_st)
+                feat.append( (bf_st_times[i] - mean_bf_st) / std_bf_st )
 
             if self.has_fs:
-                feat.append(fs_flags[i])
+                feat.append(fs_flags[i])  # binary flag as-is
 
             if self.has_weight:
                 feat.append((weights[i] - self.weight_mu) / self.weight_sd)
-            # --- per‑lane win rates (raw 0‑1) ---------------------------
+
+            # --- per‑lane win rates: use race-wise Z instead of raw ---
             if self.has_first_rate:
-                feat.append(first_rates[i])
+                feat.append( (first_rates[i]  - mean_f)  / std_f )
             if self.has_two_rate:
-                feat.append(two_rates[i])
+                feat.append( (two_rates[i]    - mean_t)  / std_t )
             if self.has_three_rate:
-                feat.append(three_rates[i])
+                feat.append( (three_rates[i]  - mean_th) / std_th )
 
             # ----- add delta (lane − course) & violation --------------
             if self.has_course:

@@ -66,19 +66,32 @@ JOIN   event e  ON r.event_id  = e.event_id
 JOIN   venue v  ON e.venue_id  = v.venue_id;
 
 -- 着順 ------------------------------------------------------
-CREATE MATERIALIZED VIEW IF NOT EXISTS core.results AS
+DROP MATERIALIZED VIEW IF EXISTS core.results CASCADE;
+CREATE MATERIALIZED VIEW core.results AS
 SELECT DISTINCT ON (rk, rs.lane)
        rk AS race_key,
        rs.lane,
        CASE
             WHEN rs.finish_order BETWEEN 1 AND 6 THEN rs.finish_order
             ELSE 7  -- 棄権・失格など
-       END AS rank
+       END AS rank,
+       rs.winning_method,
+       -- NORMALIZE: raw.winning_method is stored in Japanese; map with longest-first order per WIN_METHODS.
+       CASE rs.winning_method
+         WHEN 'まくり差し' THEN 'MAKURI_SASHI'
+         WHEN 'まくり'     THEN 'MAKURI'
+         WHEN '差し'       THEN 'SASHI'
+         WHEN '逃げ'       THEN 'NIGE'
+         WHEN '抜き'       THEN 'NUKI'
+         WHEN '恵まれ'     THEN 'MEGUMARE'
+         ELSE 'OTHER'
+       END AS win_pattern
 FROM (
     SELECT core.f_race_key(e.event_date, r.race_no, v.name) AS rk,
            rs.result_id,
            rs.lane,
-           rs.finish_order
+           rs.finish_order,
+           r.winning_method
     FROM   raw.result rs
     JOIN   raw.race   r ON rs.race_id = r.race_id
     JOIN   event  e ON r.event_id = e.event_id

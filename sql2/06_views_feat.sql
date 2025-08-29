@@ -343,6 +343,21 @@ WITH NO DATA;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_feat_tf2_lane1_lose_pat_stats_race_key
   ON feat.tf2_lane1_lose_pat_stats (race_key);
 
+DROP MATERIALIZED VIEW IF EXISTS feat.train_features_base CASCADE;
+CREATE MATERIALIZED VIEW IF NOT EXISTS feat.train_features_base AS
+SELECT
+    tf.*,
+    ls.lane1_starts, ls.lane1_firsts, ls.lane1_first_rate, ls.lane1_two_rate, ls.lane1_three_rate,
+    ls.lane2_starts, ls.lane2_firsts, ls.lane2_first_rate, ls.lane2_two_rate, ls.lane2_three_rate,
+    ls.lane3_starts, ls.lane3_firsts, ls.lane3_first_rate, ls.lane3_two_rate, ls.lane3_three_rate,
+    ls.lane4_starts, ls.lane4_firsts, ls.lane4_first_rate, ls.lane4_two_rate, ls.lane4_three_rate,
+    ls.lane5_starts, ls.lane5_firsts, ls.lane5_first_rate, ls.lane5_two_rate, ls.lane5_three_rate,
+    ls.lane6_starts, ls.lane6_firsts, ls.lane6_first_rate, ls.lane6_two_rate, ls.lane6_three_rate
+FROM feat.train_features2 tf
+LEFT JOIN feat.tf2_lane_stats             ls    USING (race_key)
+WHERE tf.venue = '若 松'
+WITH NO DATA;
+
 DROP MATERIALIZED VIEW IF EXISTS feat.train_features3 CASCADE;
 CREATE MATERIALIZED VIEW IF NOT EXISTS feat.train_features3 AS
 SELECT
@@ -370,6 +385,43 @@ LEFT JOIN feat.tf2_lane_stats             ls    USING (race_key)
 LEFT JOIN feat.tf2_lane_pat_stats         lps   USING (race_key)
 LEFT JOIN feat.tf2_lane1_lose_pat_stats   l1los USING (race_key)
 WHERE tf.venue = '若 松'
+WITH NO DATA;
+
+-- /* ---------- 評価用特徴量（feat.eval_features） ---------- */
+DROP MATERIALIZED VIEW IF EXISTS feat.eval_features_base CASCADE;
+CREATE MATERIALIZED VIEW IF NOT EXISTS feat.eval_features_base AS
+WITH ord AS (
+  SELECT
+    r.race_key,
+    r.lane,
+    r.rank,
+    ROW_NUMBER() OVER (PARTITION BY r.race_key ORDER BY r.rank, r.lane) AS ord
+  FROM core.results r
+  WHERE r.rank IS NOT NULL
+),
+pos AS (
+  SELECT
+    race_key,
+    MIN(lane) FILTER (WHERE ord = 1) AS first_lane,
+    MIN(lane) FILTER (WHERE ord = 2) AS second_lane,
+    MIN(lane) FILTER (WHERE ord = 3) AS third_lane
+  FROM ord
+  GROUP BY race_key
+)
+SELECT
+    tf.*,
+    pos.first_lane,
+    pos.second_lane,
+    pos.third_lane,
+    (p.payout_yen / 100.0)       AS trifecta_odds,
+    p.popularity_rank  AS trifecta_popularity_rank
+FROM feat.train_features3 tf
+LEFT JOIN pos USING (race_key)
+LEFT JOIN core.payout3t p
+  ON p.race_key = tf.race_key
+ AND p.first_lane = pos.first_lane
+ AND p.second_lane = pos.second_lane
+ AND p.third_lane  = pos.third_lane
 WITH NO DATA;
 
 -- /* ---------- 評価用特徴量（feat.eval_features） ---------- */
@@ -435,11 +487,14 @@ ANALYZE feat.tf2_lane_stats;
 ANALYZE feat.tf2_lane_pat_stats;
 ANALYZE feat.filtered_lane1_lose_pat;
 ANALYZE feat.tf2_lane1_lose_pat_stats;
+REFRESH MATERIALIZED VIEW feat.train_features_base;
 REFRESH MATERIALIZED VIEW feat.train_features3;
 -- Prepare for concurrent refreshes in future runs
+CREATE UNIQUE INDEX IF NOT EXISTS idx_base_race_key ON feat.train_features_base (race_key);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tf3_race_key ON feat.train_features3 (race_key);
 \echo '--- eval_features3 層のマテリアライズドビューを更新中 ---'
 REFRESH MATERIALIZED VIEW feat.eval_features3;
+REFRESH MATERIALIZED VIEW feat.eval_features_base;
 
 /* ---------- データ存在チェック ---------- */
 \echo '--- feat 層データ存在チェック ---'

@@ -15,7 +15,7 @@
 
 
 
-# In[ ]:
+# In[1]:
 
 
 get_ipython().run_line_magic('load_ext', 'autoreload')
@@ -107,7 +107,7 @@ register_feature(FeatureDef("wind_sin", _wind_sin, deps=["wind_dir_deg"]))
 register_feature(FeatureDef("wind_cos", _wind_cos, deps=["wind_dir_deg"]))
 
 
-# In[ ]:
+# In[2]:
 
 
 import nbformat
@@ -123,7 +123,7 @@ with open("main_base.py", "w", encoding="utf-8") as f:
     f.write(source)
 
 
-# In[ ]:
+# In[3]:
 
 
 load_dotenv(override=True)
@@ -150,7 +150,7 @@ result_df = pd.read_sql("""
 print(f"Loaded {len(result_df)} rows from the database.")
 
 
-# In[ ]:
+# In[4]:
 
 
 result_df = apply_features(result_df)
@@ -199,7 +199,7 @@ scaler_filename = "artifacts/wind_scaler.pkl"
 joblib.dump(scaler, scaler_filename)
 
 
-# In[ ]:
+# In[5]:
 
 
 def encode(col):
@@ -211,7 +211,7 @@ venue2id = encode("venue")
 # race_type2id = encode("race_type")
 
 
-# In[ ]:
+# In[6]:
 
 
 # ============================================================
@@ -248,8 +248,11 @@ RANKNET_ALPHA = 0.10   # weight for pairwise RankNet loss
 TEMPERATURE   = 0.80   # logits are divided by T at inference
 LAMBDA_WIN = 1.0        # weight for winner‑BCE loss
 
+TOPK_K = 3
+TOPK_WEIGHTS = [3.0, 2.0, 1.0]
 
-# In[ ]:
+
+# In[7]:
 
 
 def pl_nll(scores: torch.Tensor, ranks: torch.Tensor, reduce: bool = True) -> torch.Tensor:
@@ -266,6 +269,43 @@ def pl_nll(scores: torch.Tensor, ranks: torch.Tensor, reduce: bool = True) -> to
         nll += log_denom - chosen
         s = s.scatter(1, idx.unsqueeze(1), float('-inf'))
 
+    return nll.mean() if reduce else nll
+
+def pl_nll_topk(scores: torch.Tensor,
+                ranks: torch.Tensor,
+                k: int = 3,
+                weights=None,
+                reduce: bool = True) -> torch.Tensor:
+    """
+    Top-k Plackett–Luce negative log-likelihood.
+   k: number of leading positions (default 3).
+    weights: length-k list/1D Tensor of non-negative weights; if None → uniform 1.0
+    reduce: if False, returns per-sample loss (B,); otherwise mean.
+    """
+    # numeric stability
+    scores = scores.clamp(-20.0, 20.0)
+    B, C = scores.shape
+    k = int(min(max(k, 1), C))
+
+    if weights is None:
+        w = torch.ones(k, device=scores.device, dtype=scores.dtype)
+    else:
+        w = torch.as_tensor(weights, device=scores.device, dtype=scores.dtype)
+        if w.numel() != k:
+            w = torch.ones(k, device=scores.device, dtype=scores.dtype)
+
+    order = torch.argsort(ranks, dim=1)   # (B,6) winner→
+    s = scores.clone()
+    nll = torch.zeros(B, device=scores.device, dtype=scores.dtype)
+
+    for t in range(k):
+        log_denom = torch.logsumexp(s, dim=1)             # (B,)
+        idx = order[:, t]                                  # (B,)
+        chosen = s.gather(1, idx.unsqueeze(1)).squeeze(1)  # (B,)
+        nll = nll + w[t] * (log_denom - chosen)
+        s = s.scatter(1, idx.unsqueeze(1), float('-inf'))  # mask the chosen lane
+
+    nll = nll / w.sum()
     return nll.mean() if reduce else nll
 
 # --- Pairwise RankNet loss ---
@@ -286,9 +326,10 @@ def ranknet_loss(scores: torch.Tensor, ranks: torch.Tensor) -> torch.Tensor:
 scores = torch.tensor([[6, 5, 4, 3, 2, 1]], dtype=torch.float32)  # lane0 が最強
 ranks  = torch.tensor([[1, 2, 3, 4, 5, 6]], dtype=torch.int64)    # lane0 が 1 着
 print("pl_nll should be ~0 :", pl_nll(scores, ranks).item())
+print("pl_nll_topk (k=3) should be ~0 :", pl_nll_topk(scores, ranks, k=TOPK_K, weights=TOPK_WEIGHTS).item())
 
 
-# In[ ]:
+# In[8]:
 
 
 result_df["race_date"] = pd.to_datetime(result_df["race_date"]).dt.date
@@ -312,7 +353,7 @@ model = DualHeadRanker(boat_in=boat_dim).to(device)
 opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=5e-5)
 
 
-# In[ ]:
+# In[9]:
 
 
 def evaluate_model(model, dataset, device):
@@ -326,7 +367,7 @@ def evaluate_model(model, dataset, device):
             lane_ids, ranks = lane_ids.to(device), ranks.to(device)
 
             _, scores, _ = model(ctx, boats, lane_ids)   # ST & win logits are ignored
-            loss = pl_nll(scores, ranks)
+            loss = pl_nll_topk(scores, ranks, k=TOPK_K, weights=TOPK_WEIGHTS)
             total_loss += loss.item() * len(ctx)
     return total_loss / len(dataset)
 
@@ -451,7 +492,7 @@ for epoch in range(EPOCHS):
         st_true, st_mask = st_true.to(device), st_mask.to(device)
 
         st_pred, scores, win_logits = model(ctx, boats, lane_ids)
-        loss_each = pl_nll(scores, ranks, reduce=False)             # (B,)
+        loss_each = pl_nll_topk(scores, ranks, k=TOPK_K, weights=TOPK_WEIGHTS, reduce=False)  # (B,)
         sample_weight = torch.where(ranks[:, 0] == 1,               # lane1 winner?
                                     torch.tensor(1.0, device=ranks.device),
                                     torch.tensor(1.5, device=ranks.device))
@@ -491,7 +532,7 @@ for epoch in range(EPOCHS):
             lane_ids, ranks = lane_ids.to(device), ranks.to(device)
             st_true, st_mask = st_true.to(device), st_mask.to(device)
             st_pred, scores, _ = model(ctx, boats, lane_ids)
-            pl_loss = pl_nll(scores, ranks)
+            pl_loss = pl_nll_topk(scores, ranks, k=TOPK_K, weights=TOPK_WEIGHTS)
             # ST MSE
             mse_st = ((st_pred - st_true) ** 2 * st_mask.float()).sum() / st_mask.float().sum()
             # ST MAE
@@ -653,7 +694,7 @@ torch.save(model.state_dict(), model_path)
 print(f"Model saved to {model_path}")
 
 
-# In[ ]:
+# In[11]:
 
 
 # ---- Monkey‑patch ROIAnalyzer so it uses BoatRaceDataset2 (MTL) ----------
@@ -778,7 +819,7 @@ df_trifecta_met_hit.to_csv("artifacts/metrics_trifecta_hit.csv", index=False)
 # )
 
 
-# In[ ]:
+# In[12]:
 
 
 # --- 予測でも「自信度」と「正解三連単の順位」を評価し、CSV に記録 ---
@@ -811,7 +852,7 @@ all_scores = torch.cat(all_scores, dim=0)   # (N,6)
 all_ranks  = torch.cat(all_ranks,  dim=0)   # (N,6)
 
 
-# In[ ]:
+# In[13]:
 
 
 # --------------------------------------------------------------------------
@@ -910,7 +951,7 @@ def run_ablation_groups(
                 
                 st_true, st_mask = st_true.to(device), st_mask.to(device)
                 st_pred, scores = model(ctx, boats, lane_ids)
-                pl_loss = pl_nll(scores, ranks)
+                pl_loss = pl_nll_topk(scores, ranks, k=TOPK_K, weights=TOPK_WEIGHTS)
                 mse_st = ((st_pred - st_true) ** 2 * st_mask.float()).sum() / st_mask.float().sum()
                 loss = pl_loss + LAMBDA_ST * mse_st
                 opt.zero_grad(); loss.backward(); opt.step()
@@ -996,7 +1037,7 @@ pd.Series(res).to_csv("artifacts/group_perm_pattern.csv")
 # print(f"[saved] {abl_path}")
 
 
-# In[ ]:
+# In[14]:
 
 
 # all_ranksとall_scoresを結合したdfに変換
@@ -1109,7 +1150,7 @@ for n in range(1, 6):
 
 
 
-# In[ ]:
+# In[15]:
 
 
 def top1_accuracy(scores: torch.Tensor, ranks: torch.Tensor) -> float:
@@ -1350,7 +1391,7 @@ with open(metrics_path, "a", newline="") as f:
 print(f"[saved] {metrics_path}")
 
 
-# In[ ]:
+# In[16]:
 
 
 # === 条件別ヒット率/ROI 分析（修正版） =========================
@@ -1552,7 +1593,7 @@ else:
 # ============================================================
 
 
-# In[ ]:
+# In[17]:
 
 
 # prediction
@@ -1723,7 +1764,7 @@ def run_ablation_groups(
                 lane_ids, ranks = lane_ids.to(device), ranks.to(device)
                 st_true, st_mask = st_true.to(device), st_mask.to(device)
                 st_pred, scores = model(ctx, boats, lane_ids)
-                pl_loss = pl_nll(scores, ranks)
+                pl_loss = pl_nll_topk(scores, ranks, k=TOPK_K, weights=TOPK_WEIGHTS)
                 mse_st = ((st_pred - st_true) ** 2 * st_mask.float()).sum() / st_mask.float().sum()
                 loss = pl_loss + LAMBDA_ST * mse_st
                 opt.zero_grad(); loss.backward(); opt.step()

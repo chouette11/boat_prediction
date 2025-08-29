@@ -7,7 +7,7 @@
 
 
 
-# In[15]:
+# In[35]:
 
 
 get_ipython().run_line_magic('load_ext', 'autoreload')
@@ -99,7 +99,7 @@ register_feature(FeatureDef("wind_sin", _wind_sin, deps=["wind_dir_deg"]))
 register_feature(FeatureDef("wind_cos", _wind_cos, deps=["wind_dir_deg"]))
 
 
-# In[16]:
+# In[36]:
 
 
 import nbformat
@@ -115,7 +115,7 @@ with open("main_base.py", "w", encoding="utf-8") as f:
     f.write(source)
 
 
-# In[ ]:
+# In[37]:
 
 
 load_dotenv(override=True)
@@ -142,7 +142,7 @@ result_df = pd.read_sql("""
 print(f"Loaded {len(result_df)} rows from the database.")
 
 
-# In[ ]:
+# In[38]:
 
 
 result_df = apply_features(result_df)
@@ -195,7 +195,7 @@ scaler_filename = "artifacts/wind_scaler.pkl"
 joblib.dump(scaler, scaler_filename)
 
 
-# In[19]:
+# In[39]:
 
 
 def encode(col):
@@ -207,7 +207,7 @@ venue2id = encode("venue")
 # race_type2id = encode("race_type")
 
 
-# In[20]:
+# In[40]:
 
 
 # ============================================================
@@ -245,7 +245,7 @@ TEMPERATURE   = 0.80   # logits are divided by T at inference
 LAMBDA_WIN = 1.0        # weight for winner‑BCE loss
 
 
-# In[21]:
+# In[41]:
 
 
 def pl_nll(scores: torch.Tensor, ranks: torch.Tensor, reduce: bool = True) -> torch.Tensor:
@@ -284,7 +284,7 @@ ranks  = torch.tensor([[1, 2, 3, 4, 5, 6]], dtype=torch.int64)    # lane0 が 1 
 print("pl_nll should be ~0 :", pl_nll(scores, ranks).item())
 
 
-# In[22]:
+# In[42]:
 
 
 result_df["race_date"] = pd.to_datetime(result_df["race_date"]).dt.date
@@ -308,7 +308,7 @@ model = DualHeadRanker(boat_in=boat_dim).to(device)
 opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=5e-5)
 
 
-# In[23]:
+# In[43]:
 
 
 def evaluate_model(model, dataset, device):
@@ -416,7 +416,7 @@ def evaluate_model(model, dataset, device):
 #     print("[diag]   ► finished quick diagnostics\n")
 
 
-# In[24]:
+# In[44]:
 
 
 # ---------------------------------------------------------------------
@@ -649,7 +649,7 @@ torch.save(model.state_dict(), model_path)
 print(f"Model saved to {model_path}")
 
 
-# In[ ]:
+# In[45]:
 
 
 # ---- Monkey‑patch ROIAnalyzer so it uses BoatRaceDataset2 (MTL) ----------
@@ -774,7 +774,7 @@ df_trifecta_met_hit.to_csv("artifacts/metrics_trifecta_hit.csv", index=False)
 # )
 
 
-# In[27]:
+# In[46]:
 
 
 # --- 予測でも「自信度」と「正解三連単の順位」を評価し、CSV に記録 ---
@@ -807,7 +807,7 @@ all_scores = torch.cat(all_scores, dim=0)   # (N,6)
 all_ranks  = torch.cat(all_ranks,  dim=0)   # (N,6)
 
 
-# In[30]:
+# In[47]:
 
 
 # --------------------------------------------------------------------------
@@ -992,7 +992,7 @@ pd.Series(res).to_csv("artifacts/group_perm_pattern.csv")
 # print(f"[saved] {abl_path}")
 
 
-# In[31]:
+# In[48]:
 
 
 # all_ranksとall_scoresを結合したdfに変換
@@ -1105,7 +1105,7 @@ for n in range(1, 6):
 
 
 
-# In[32]:
+# In[52]:
 
 
 def top1_accuracy(scores: torch.Tensor, ranks: torch.Tensor) -> float:
@@ -1224,6 +1224,45 @@ tri_ranks  = get_trifecta_rank_unordered(all_scores, all_ranks)
 tri_ranks_order = get_trifecta_rank_ordered(all_scores, all_ranks)
 mean_tri_order  = float(np.mean(tri_ranks_order)) if len(tri_ranks_order) else float("nan")
 
+# ---- Popularity vs Model comparison (ordered trifecta) ----
+# We expect df_recent to carry 'trifecta_popularity_rank' per race_key (ordered).
+pop_col = None
+for c in ["trifecta_popularity_rank"]:
+    if c in df_recent.columns:
+        pop_col = c; break
+
+if pop_col is not None:
+    _model_rank_df = pd.DataFrame({
+        "race_key": np.array(all_keys),
+        "model_trifecta_rank_ordered": tri_ranks_order
+    })
+    _pop_df = df_recent[["race_key", pop_col]].drop_duplicates("race_key").rename(columns={pop_col: "pop_trifecta_rank_ordered"})
+    _cmp_df = _model_rank_df.merge(_pop_df, on="race_key", how="inner")
+    _cmp_df["pop_trifecta_rank_ordered"] = pd.to_numeric(_cmp_df["pop_trifecta_rank_ordered"], errors="coerce")
+    _cmp_df = _cmp_df.dropna(subset=["pop_trifecta_rank_ordered"])  # keep valid rows only
+
+    # Gains: positive if model ranks the true trifecta higher (smaller rank) than popularity
+    _cmp_df["gain"] = _cmp_df["pop_trifecta_rank_ordered"] - _cmp_df["model_trifecta_rank_ordered"]
+
+    pop_tri_rank_mean = float(_cmp_df["pop_trifecta_rank_ordered"].mean()) if len(_cmp_df) else float("nan")
+    model_vs_pop_avg_gain = float(_cmp_df["gain"].mean()) if len(_cmp_df) else float("nan")
+    model_vs_pop_median_gain = float(_cmp_df["gain"].median()) if len(_cmp_df) else float("nan")
+    model_beats_pop_rate = float((_cmp_df["gain"] > 0).mean()) if len(_cmp_df) else float("nan")
+
+    def _cov(N: int):
+        if len(_cmp_df) == 0:
+            return float("nan"), float("nan"), float("nan")
+        pop_hit = float((_cmp_df["pop_trifecta_rank_ordered"] <= N).mean())
+        model_hit = float((_cmp_df["model_trifecta_rank_ordered"] <= N).mean())
+        return pop_hit, model_hit, model_hit - pop_hit
+
+    pop_top1, model_top1_ord, diff_top1 = _cov(1)
+    pop_top3, model_top3_ord, diff_top3 = _cov(3)
+else:
+    pop_tri_rank_mean = model_vs_pop_avg_gain = model_vs_pop_median_gain = model_beats_pop_rate = float("nan")
+    pop_top1 = model_top1_ord = diff_top1 = pop_top3 = model_top3_ord = diff_top3 = float("nan")
+    print("[pop] Column 'trifecta_popularity_rank' not found; skipping pop vs model comparison.")
+
 acc_top1   = top1_accuracy(all_scores, all_ranks)
 acc_tri3   = trifecta_hit_rate(all_scores, all_ranks)
 mean_var   = score_vars.mean().item()
@@ -1269,6 +1308,9 @@ print(f"  • Spearman ρ             : {rho_spearman:.3f}")
 print(f"  • Score variance (mean/median): {mean_var:.4f} / {median_var:.4f}")
 print(f"  • Avg rank of true trifecta (unordered) : {mean_tri:.2f}")
 print(f"  • Avg rank of true trifecta (strict)    : {mean_tri_order:.2f}")
+print(f'gain: pop_rank − model_rank')
+print(f"  • Pop vs Model (ordered true trifecta rank): mean pop {pop_tri_rank_mean:.2f}, avg gain {model_vs_pop_avg_gain:.2f}, median gain {model_vs_pop_median_gain:.2f}, beat-rate {model_beats_pop_rate:.3f}")
+print(f"  • TopN cover (ordered): N=1 model {model_top1_ord:.3f} vs pop {pop_top1:.3f} (Δ{diff_top1:.3f}); N=3 model {model_top3_ord:.3f} vs pop {pop_top3:.3f} (Δ{diff_top3:.3f})")
 
 # ---- CSV に追記保存 ----
 import csv, os
@@ -1286,7 +1328,10 @@ with open(metrics_path, "a", newline="") as f:
                     "baseline123_top3unordered",
                     "winner_mrr", "spearman_rho",
                     "var_mean", "var_median", "tri_rank_mean",
-                    "tri_rank_order_mean"])
+                    "tri_rank_order_mean",
+                    "pop_tri_rank_mean", "model_vs_pop_avg_gain", "model_vs_pop_median_gain", "model_beats_pop_rate",
+                    "pop_top1_hit", "model_top1_ord_hit", "delta_top1",
+                    "pop_top3_hit", "model_top3_ord_hit", "delta_top3"])
     w.writerow([str(today), len(all_scores),
                 acc_top1, acc_pos1, acc_pos2, acc_pos3,
                 hit_top3_unordered, acc_tri3,
@@ -1294,11 +1339,14 @@ with open(metrics_path, "a", newline="") as f:
                 base_pos1, base_pos2, base_pos3,
                 base_top3_unord,
                 mrr_winner, rho_spearman,
-                mean_var, median_var, mean_tri, mean_tri_order])
+                mean_var, median_var, mean_tri, mean_tri_order,
+                pop_tri_rank_mean, model_vs_pop_avg_gain, model_vs_pop_median_gain, model_beats_pop_rate,
+                pop_top1, model_top1_ord, diff_top1,
+                pop_top3, model_top3_ord, diff_top3])
 print(f"[saved] {metrics_path}")
 
 
-# In[33]:
+# In[50]:
 
 
 # === 条件別ヒット率/ROI 分析（修正版） =========================
@@ -1500,7 +1548,7 @@ else:
 # ============================================================
 
 
-# In[34]:
+# In[51]:
 
 
 # prediction

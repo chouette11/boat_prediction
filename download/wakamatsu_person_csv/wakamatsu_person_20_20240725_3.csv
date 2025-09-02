@@ -1,0 +1,7 @@
+boat_no,reg_no,name,age,class_now,class_hist1,class_hist2,class_hist3,ability_now,ability_prev,F_now,L_now,winrate_natl,2in_natl,3in_natl,nat_1st,nat_2nd,nat_3rd,nat_starts,loc_1st,loc_2nd,loc_3rd,loc_starts,motor_no,motor_2in,motor_3in,mot_1st,mot_2nd,mot_3rd,mot_starts,boat_no_hw,boat_2in,boat_3in,boa_1st,boa_2nd,boa_3rd,boa_starts,source_file
+1,3448,高山秀雄,54,B1,B1,B1,B1,47,,0,0,4.59,16.5,43.69,4,13,28,103,2,4,9,36,35,33.97,46.15,26,27,19,156,14,17.14,42.86,1,5,9,35,download/wakamatsu_person_html/wakamatsu_person_20_20240725.html
+2,4181,花本夏樹,40,B1,B1,B1,B1,46,,0,0,4.41,23.47,36.73,12,11,13,98,1,0,5,7,23,32.45,47.02,24,25,22,151,58,45.24,66.67,12,7,9,42,download/wakamatsu_person_html/wakamatsu_person_20_20240725.html
+3,5091,為本智也,23,A2,A2,B1,B1,51,,0,0,6.39,40.74,74.07,12,10,18,54,0,0,0,0,38,33.12,47.4,32,19,22,154,56,30.0,45.0,7,5,6,40,download/wakamatsu_person_html/wakamatsu_person_20_20240725.html
+4,4962,畑　竜生,27,B1,B1,B1,B1,49,,0,0,5.17,32.5,49.17,20,19,20,120,0,0,0,0,22,31.88,53.75,26,25,35,160,74,50.0,63.89,12,6,5,36,download/wakamatsu_person_html/wakamatsu_person_20_20240725.html
+5,4161,黒柳浩孝,42,A2,A2,A2,A2,52,,0,0,6.24,40.74,63.7,32,23,31,135,3,5,4,21,9,31.25,51.25,28,22,32,160,45,51.35,70.27,6,13,7,37,download/wakamatsu_person_html/wakamatsu_person_20_20240725.html
+6,4136,江夏　満,43,A1,A1,A1,A1,56,,0,0,6.64,51.56,66.41,34,32,19,128,17,13,17,65,11,32.03,48.37,25,24,25,153,32,63.64,63.64,11,3,0,22,download/wakamatsu_person_html/wakamatsu_person_20_20240725.html

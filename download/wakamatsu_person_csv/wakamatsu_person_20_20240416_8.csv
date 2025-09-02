@@ -1,0 +1,7 @@
+boat_no,reg_no,name,age,class_now,class_hist1,class_hist2,class_hist3,ability_now,ability_prev,F_now,L_now,winrate_natl,2in_natl,3in_natl,nat_1st,nat_2nd,nat_3rd,nat_starts,loc_1st,loc_2nd,loc_3rd,loc_starts,motor_no,motor_2in,motor_3in,mot_1st,mot_2nd,mot_3rd,mot_starts,boat_no_hw,boat_2in,boat_3in,boa_1st,boa_2nd,boa_3rd,boa_starts,source_file
+1,4443,津田裕絵,37,A2,A2,B1,A2,52,,0,0,5.21,28.57,52.94,16,18,29,119,3,6,4,21,17,32.91,50.63,14,12,14,79,38,32.14,48.98,28,35,33,196,download/wakamatsu_person_html/wakamatsu_person_20_20240416.html
+2,5162,松尾怜実,24,B1,B1,B1,B2,44,,0,0,4.23,17.14,28.57,6,6,8,70,5,0,1,33,4,24.36,43.59,10,9,15,78,71,31.03,47.78,21,42,34,203,download/wakamatsu_person_html/wakamatsu_person_20_20240416.html
+3,3470,新田芳美,54,B1,B1,B1,B2,50,,0,0,4.88,30.77,46.15,10,14,12,78,0,0,0,0,31,25.64,33.33,6,14,6,78,21,32.16,46.78,23,32,25,171,download/wakamatsu_person_html/wakamatsu_person_20_20240416.html
+4,4764,小池礼乃,33,B2,B2,A2,B1,0,,0,0,4.22,16.67,33.33,0,3,3,18,3,5,8,28,25,26.83,43.9,14,8,14,82,64,31.96,51.03,32,30,37,194,download/wakamatsu_person_html/wakamatsu_person_20_20240416.html
+5,4399,松本晶恵,36,B1,A1,A1,A2,52,,1,0,5.89,42.06,63.55,16,29,23,107,0,0,0,0,58,27.54,46.38,7,12,13,69,67,22.73,44.95,19,26,44,198,download/wakamatsu_person_html/wakamatsu_person_20_20240416.html
+6,3674,岸　恵子,51,B1,A2,A1,B1,50,,0,0,5.03,30.77,52.56,12,12,17,78,5,5,0,18,52,23.86,39.77,12,9,14,88,25,42.05,55.38,36,46,26,195,download/wakamatsu_person_html/wakamatsu_person_20_20240416.html

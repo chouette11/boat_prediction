@@ -1,0 +1,7 @@
+boat_no,reg_no,name,age,class_now,class_hist1,class_hist2,class_hist3,ability_now,ability_prev,F_now,L_now,winrate_natl,2in_natl,3in_natl,nat_1st,nat_2nd,nat_3rd,nat_starts,loc_1st,loc_2nd,loc_3rd,loc_starts,motor_no,motor_2in,motor_3in,mot_1st,mot_2nd,mot_3rd,mot_starts,boat_no_hw,boat_2in,boat_3in,boa_1st,boa_2nd,boa_3rd,boa_starts,source_file
+1,3563,堤　昇,54,A2,A2,A2,B1,50,,0,0,4.87,26.89,45.38,13,19,22,119,1,1,1,7,27,53.33,71.11,14,10,8,45,64,31.52,50.91,25,27,32,165,download/wakamatsu_person_html/wakamatsu_person_20_20240211.html
+2,4413,水摩　敦,37,A2,A1,A1,A1,52,,0,0,6.2,49.61,60.63,32,31,14,127,23,9,15,66,24,32.61,54.35,8,7,10,46,19,42.04,59.87,33,33,28,157,download/wakamatsu_person_html/wakamatsu_person_20_20240211.html
+3,4314,青木幸太,39,B1,A2,B1,B1,50,,0,0,5.29,35.71,48.81,19,11,11,84,14,12,13,69,49,38.3,53.19,9,9,7,47,59,37.82,52.56,29,30,23,156,download/wakamatsu_person_html/wakamatsu_person_20_20240211.html
+4,4778,堤　啓輔,38,A2,B1,B1,B1,51,,1,0,5.63,34.52,52.38,10,19,15,84,1,5,1,24,59,20.45,43.18,5,4,10,44,37,39.38,54.38,36,27,24,160,download/wakamatsu_person_html/wakamatsu_person_20_20240211.html
+5,4020,川上清人,43,B1,B1,B1,B1,45,,0,0,3.55,13.7,32.88,2,8,14,73,2,7,5,48,44,33.33,50.0,7,5,6,36,67,25.32,46.2,17,23,33,158,download/wakamatsu_person_html/wakamatsu_person_20_20240211.html
+6,4949,横田貴満,31,A2,A2,A2,A2,51,,0,0,5.5,34.15,56.91,21,21,28,123,1,0,2,7,5,35.56,53.33,8,8,8,45,60,38.71,57.42,26,34,29,155,download/wakamatsu_person_html/wakamatsu_person_20_20240211.html

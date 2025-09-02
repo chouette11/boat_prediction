@@ -1,0 +1,7 @@
+boat_no,reg_no,name,age,class_now,class_hist1,class_hist2,class_hist3,ability_now,ability_prev,F_now,L_now,winrate_natl,2in_natl,3in_natl,nat_1st,nat_2nd,nat_3rd,nat_starts,loc_1st,loc_2nd,loc_3rd,loc_starts,motor_no,motor_2in,motor_3in,mot_1st,mot_2nd,mot_3rd,mot_starts,boat_no_hw,boat_2in,boat_3in,boa_1st,boa_2nd,boa_3rd,boa_starts,source_file
+1,4336,松田竜馬,40,A2,B1,B1,A2,51,,0,0,5.82,35.85,62.26,20,18,28,106,13,15,17,89,43,31.98,50.25,29,34,36,197,23,36.47,49.41,17,14,11,85,download/wakamatsu_person_html/wakamatsu_person_20_20240914.html
+2,4196,田中太一,42,B1,B1,B1,B1,46,,0,0,4.16,21.74,38.04,7,13,15,92,6,3,2,29,18,32.32,45.45,31,33,26,198,67,31.65,46.84,13,12,12,79,download/wakamatsu_person_html/wakamatsu_person_20_20240914.html
+3,3998,冨成謙児,45,B1,B1,B1,B1,48,,0,0,4.31,23.81,40.0,6,19,17,105,8,7,11,56,41,33.85,49.23,35,31,30,195,57,31.43,54.29,12,10,16,70,download/wakamatsu_person_html/wakamatsu_person_20_20240914.html
+4,4216,星　栄爾,39,B1,B1,B1,A1,48,,0,0,5.38,30.93,53.61,14,16,22,97,6,4,4,23,31,28.95,40.53,26,29,22,190,52,23.68,35.53,6,12,9,76,download/wakamatsu_person_html/wakamatsu_person_20_20240914.html
+5,4451,松崎祐太,36,A1,A1,A1,A1,54,,0,0,6.3,42.54,64.93,34,23,30,134,10,16,15,56,59,30.61,52.04,26,34,42,196,68,29.76,44.05,6,19,12,84,download/wakamatsu_person_html/wakamatsu_person_20_20240914.html
+6,5261,岡　暢祐,26,B1,B1,B2,B2,39,,1,0,2.87,11.69,18.18,4,5,5,77,0,0,0,7,42,28.8,46.6,37,18,34,191,70,39.08,52.87,19,15,12,87,download/wakamatsu_person_html/wakamatsu_person_20_20240914.html

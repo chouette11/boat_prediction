@@ -1,0 +1,7 @@
+lane,racer_id,name,weight,adjust_weight,exhibition_time,tilt,photo,source_file,ST,course
+1,3448,,52.0kg,0.0,7.09,-0.5,/racerphoto/3448.jpg,download/wakamatsu_off_beforeinfo_html_2223/wakamatsu_beforeinfo_20_20220705_2.html,F.04,1
+2,4978,,52.4kg,0.0,7.00,0.0,/racerphoto/4978.jpg,download/wakamatsu_off_beforeinfo_html_2223/wakamatsu_beforeinfo_20_20220705_2.html,F.03,2
+3,4802,,52.0kg,0.0,6.89,-0.5,/racerphoto/4802.jpg,download/wakamatsu_off_beforeinfo_html_2223/wakamatsu_beforeinfo_20_20220705_2.html,F.02,3
+4,4203,,52.3kg,0.0,7.03,-0.5,/racerphoto/4203.jpg,download/wakamatsu_off_beforeinfo_html_2223/wakamatsu_beforeinfo_20_20220705_2.html,.08,5
+5,4771,,53.0kg,0.0,7.00,-0.5,/racerphoto/4771.jpg,download/wakamatsu_off_beforeinfo_html_2223/wakamatsu_beforeinfo_20_20220705_2.html,.06,4
+6,5176,,54.5kg,0.0,7.04,-0.5,/racerphoto/5176.jpg,download/wakamatsu_off_beforeinfo_html_2223/wakamatsu_beforeinfo_20_20220705_2.html,.11,6

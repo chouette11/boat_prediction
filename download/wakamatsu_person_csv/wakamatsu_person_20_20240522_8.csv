@@ -1,0 +1,7 @@
+boat_no,reg_no,name,age,class_now,class_hist1,class_hist2,class_hist3,ability_now,ability_prev,F_now,L_now,winrate_natl,2in_natl,3in_natl,nat_1st,nat_2nd,nat_3rd,nat_starts,loc_1st,loc_2nd,loc_3rd,loc_starts,motor_no,motor_2in,motor_3in,mot_1st,mot_2nd,mot_3rd,mot_starts,boat_no_hw,boat_2in,boat_3in,boa_1st,boa_2nd,boa_3rd,boa_starts,source_file
+1,4963,實森美祐,27,A2,A2,A2,A2,53,,0,0,6.06,47.19,57.3,25,17,9,89,0,0,0,0,29,28.3,42.45,13,17,15,106,44,30.93,47.46,41,32,39,236,download/wakamatsu_person_html/wakamatsu_person_20_20240522.html
+2,4117,廣中智紗,43,A1,A1,A1,A2,55,,0,0,6.44,44.55,67.27,22,27,25,110,0,0,0,0,4,24.75,41.58,11,14,17,101,52,39.13,60.0,36,54,48,230,download/wakamatsu_person_html/wakamatsu_person_20_20240522.html
+3,4447,深川麻奈,37,A2,A2,A2,A2,51,,0,0,5.73,38.74,61.26,16,27,25,111,11,10,13,68,12,32.48,53.85,16,22,25,117,40,32.81,51.56,31,32,36,192,download/wakamatsu_person_html/wakamatsu_person_20_20240522.html
+4,4224,大橋栄里,42,B1,B1,B1,B1,47,,0,0,4.53,25.93,44.44,9,12,15,81,1,9,6,33,51,48.67,63.72,27,28,17,113,18,39.82,55.75,55,35,36,226,download/wakamatsu_person_html/wakamatsu_person_20_20240522.html
+5,3580,水口由紀,51,B1,B1,B1,B1,49,,0,0,4.66,25.0,42.71,11,13,17,96,2,2,0,9,56,40.71,61.95,25,21,24,113,29,32.5,47.5,26,39,30,200,download/wakamatsu_person_html/wakamatsu_person_20_20240522.html
+6,4349,犬童千秋,38,B1,B1,B1,A2,52,,0,0,5.82,40.0,58.95,14,24,18,95,7,11,15,54,16,41.44,63.96,21,25,25,111,22,38.16,55.26,49,38,39,228,download/wakamatsu_person_html/wakamatsu_person_20_20240522.html

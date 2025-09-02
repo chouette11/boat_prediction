@@ -1,0 +1,2 @@
+obs_datetime_label,weather,air_temp_C,wind_speed_m,water_temp_C,wave_height_cm,wind_dir_icon,source_file
+水面気象情報　20:38現在,曇り,22.0℃,5m,22.0℃,5cm,is-wind6,download/wakamatsu_off_beforeinfo_html_2223/wakamatsu_beforeinfo_20_20230527_1.html

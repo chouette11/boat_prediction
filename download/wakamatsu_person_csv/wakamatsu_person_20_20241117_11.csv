@@ -1,0 +1,7 @@
+boat_no,reg_no,name,age,class_now,class_hist1,class_hist2,class_hist3,ability_now,ability_prev,F_now,L_now,winrate_natl,2in_natl,3in_natl,nat_1st,nat_2nd,nat_3rd,nat_starts,loc_1st,loc_2nd,loc_3rd,loc_starts,motor_no,motor_2in,motor_3in,mot_1st,mot_2nd,mot_3rd,mot_starts,boat_no_hw,boat_2in,boat_3in,boa_1st,boa_2nd,boa_3rd,boa_starts,source_file
+1,4264,長尾章平,39,A1,A1,A2,A2,54,,0,0,6.52,44.27,70.99,34,24,35,131,6,7,9,38,25,36.12,51.1,44,38,34,227,46,29.25,48.11,12,19,20,106,download/wakamatsu_person_html/wakamatsu_person_20_20241117.html
+2,4079,出畑孝典,45,A1,A1,A1,A2,54,,0,0,6.98,59.09,73.48,46,32,19,132,21,20,14,90,14,33.33,47.81,35,41,33,228,63,25.0,35.0,13,12,10,100,download/wakamatsu_person_html/wakamatsu_person_20_20241117.html
+3,4260,中越博紀,40,A2,A2,A2,A2,50,,0,0,5.67,37.7,58.2,26,20,25,122,4,7,7,33,20,39.3,56.77,46,44,40,229,36,37.08,57.3,18,15,18,89,download/wakamatsu_person_html/wakamatsu_person_20_20241117.html
+4,4532,秋元　哲,36,A1,A1,A1,A1,57,,0,0,6.74,48.54,66.99,28,22,19,103,4,4,3,17,48,39.32,52.56,45,47,31,234,15,26.21,46.6,13,14,21,103,download/wakamatsu_person_html/wakamatsu_person_20_20241117.html
+5,4142,平野和明,43,A2,A2,A2,A2,52,,0,0,5.75,35.59,61.02,14,28,30,118,4,8,7,29,26,40.61,56.77,50,43,37,229,43,41.18,59.8,20,22,19,102,download/wakamatsu_person_html/wakamatsu_person_20_20241117.html
+6,4366,前沢丈史,39,A2,A2,A1,A1,52,,0,0,6.16,46.6,64.08,21,27,18,103,0,0,0,0,37,37.89,56.83,38,48,43,227,40,38.18,62.73,23,19,27,110,download/wakamatsu_person_html/wakamatsu_person_20_20241117.html

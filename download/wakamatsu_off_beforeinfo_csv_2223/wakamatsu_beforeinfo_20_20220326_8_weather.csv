@@ -1,0 +1,2 @@
+obs_datetime_label,weather,air_temp_C,wind_speed_m,water_temp_C,wave_height_cm,wind_dir_icon,source_file
+水面気象情報　7R時点,曇り,14.0℃,7m,15.0℃,7cm,is-wind14,download/wakamatsu_off_beforeinfo_html_2223/wakamatsu_beforeinfo_20_20220326_8.html

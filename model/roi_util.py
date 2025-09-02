@@ -129,31 +129,12 @@ class ROIAnalyzer:
 
         p_raw = np.array(p_model_list, dtype=float)
 
-        if calibrate == "platt":
-            lr = LogisticRegression(solver="lbfgs")
-            lr.fit(p_raw.reshape(-1, 1), hit_mask.astype(int))
-            p_calib = lr.predict_proba(p_raw.reshape(-1, 1))[:, 1]
+        returns = np.where(hit_mask, df["trifecta_odds"].values, 0.0)        # payoff only when hit
 
-        elif calibrate == "isotonic":
-            ir = IsotonicRegression(out_of_bounds="clip")
-            ir.fit(p_raw, hit_mask.astype(int))
-            p_calib = ir.transform(p_raw)
-
-        else:  # no calibration
-            p_calib = p_raw
-
-        edge = df["odds"].values * p_calib - 1.0
-        kelly = (edge / df["odds"].values) * tau
-
-        returns = np.where(hit_mask, df["odds"].values, 0.0)        # payoff only when hit
-
-        df_met = df[["race_key", "first_lane", "second_lane", "third_lane", "odds"]].copy()
+        df_met = df[["race_key", "first_lane", "second_lane", "third_lane", "trifecta_odds"]].copy()
         df_met[["pred1", "pred2", "pred3"]] = preds
         df_met["conf"] = confs
         df_met["p_model_raw"] = p_raw
-        df_met["p_model"] = p_calib
-        df_met["edge"] = edge
-        df_met["kelly"] = kelly
         df_met["hit"] = hit_mask
         df_met["returns"] = returns
         df_met[["act1", "act2", "act3"]] = np.column_stack([act1, act2, act3])
@@ -206,10 +187,10 @@ class ROIAnalyzer:
         
 
         # df_met_hitを行でループ
-        df_hit = pd.DataFrame(columns=["race_key", "odds", "true_order"])
+        df_hit = pd.DataFrame(columns=["race_key", "trifecta_odds", "true_order"])
         for i in range(len(df_met_hit)):
             race_key = df_met_hit.iloc[i]["race_key"]
-            odds = df_met_hit.iloc[i]["odds"]
+            odds = df_met_hit.iloc[i]["trifecta_odds"]
             # np.int64 から int に変換
             first_lane = int(df_met_hit.iloc[i]["first_lane"])
             second_lane = int(df_met_hit.iloc[i]["second_lane"])
@@ -218,7 +199,7 @@ class ROIAnalyzer:
 
             df_hit.loc[len(df_hit)] = {
                 "race_key": race_key,
-                "odds": odds,
+                "trifecta_odds": odds,
                 "true_order": true_order
             }
 

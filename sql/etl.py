@@ -730,7 +730,7 @@ def main() -> None:
         "racerresult2": Path(os.getenv("CSV_DIR_RACERRESULT2", "download/person_record_csv")),
         "racercourse": Path(os.getenv("CSV_DIR_RACERCOURSE", "download/person_record_csv")),
         "racerboatcourse": Path(os.getenv("CSV_DIR_RACERBOATCOURSE", "download/person_record_csv")),
-        "racelist_entries": Path(os.getenv("CSV_DIR_RACELIST_ENTRIES", "download/wakamatsu_off_racelist_csv")),
+        # "racelist_entries": Path(os.getenv("CSV_DIR_RACELIST_ENTRIES", "download/wakamatsu_off_racelist_csv")),
     }
 
     user = os.getenv("PGUSER", "keiichiro")
@@ -763,6 +763,7 @@ def main() -> None:
     print("✔ Staging import complete.")
 
 def predict_main() -> None:
+    print("=== predict_main が呼ばれました ===")
     from dotenv import load_dotenv
     load_dotenv(override=True)
     

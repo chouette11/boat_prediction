@@ -4,16 +4,9 @@ def check(conn):
     import datetime as dt
     today = dt.date.today()
     ex = f"""
--- 例）3桁以外（パース対象外）を抽出
 SELECT *
-FROM (
-  SELECT race_key, combination,
-         regexp_replace(combination, '\D', '', 'g') AS comb_digits
-  FROM core.payouts
-  WHERE bet_type = '３連単'
-) t
-WHERE length(comb_digits) <> 3
-LIMIT 100;
+FROM feat.filtered_course
+LIMIT 10
 """
     print(ex)
     cur.execute(ex)

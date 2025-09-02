@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS raw.results_staging (
     racer_no       INT,
     racer_name     TEXT,
     arrival_time   TEXT,
-    st_entry       INT,
+    course         INT,
     st_time_raw    TEXT,
     tactic         TEXT,
     stadium        TEXT,
@@ -30,8 +30,8 @@ CREATE TABLE IF NOT EXISTS raw.beforeinfo_staging (
     tilt              NUMERIC,
     photo             TEXT,
     source_file       TEXT,
-    st_raw            TEXT,
-    st_entry          INT
+    st_time_raw       TEXT,
+    course            INT
 );
 
 CREATE TABLE IF NOT EXISTS raw.weather_staging (
@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS raw.weather_staging (
     wind_dir_icon      TEXT,
     source_file        TEXT
 );
+
 
 CREATE TABLE IF NOT EXISTS raw.person_staging (
     boat_no         INT,
@@ -87,19 +88,183 @@ CREATE TABLE IF NOT EXISTS raw.person_staging (
     race_no         INT
 );
 
+CREATE TABLE IF NOT EXISTS raw.odds3t_staging (
+    first_lane      INT,
+    second_lane     INT,
+    third_lane      INT,
+    odds            NUMERIC,
+    source_file     TEXT
+);
+
+-- racelist（エントリー情報）取り込み用STAGING
+CREATE TABLE IF NOT EXISTS raw.racelist_entries_staging (
+    date_label       TEXT,         -- CSV: date (レース日、文字列のまま保持)
+    jcd              INT,          -- 場コード
+    place            TEXT,         -- 場名
+    title            TEXT,         -- 開催タイトル
+    day_label        TEXT,         -- 〇日目ラベル
+    distance_m       INT,          -- 距離(m)
+    race_no          INT,          -- CSV: rno
+    lane             INT,          -- 枠番
+    reg_no           INT,          -- 登番
+    grade            TEXT,         -- 級別
+    name             TEXT,         -- 選手名
+    branch           TEXT,         -- 支部
+    birthplace       TEXT,         -- 出身
+    age              INT,
+    weight_raw       TEXT,         -- CSV: weight_kg（補正前の文字列保持）
+    f_count          INT,          -- フライング回数
+    l_count          INT,          -- 出遅れ回数
+    avg_st           NUMERIC,      -- 平均ST
+    national_win     NUMERIC,      -- 全国勝率
+    national_2ren    NUMERIC,      -- 全国2連対率
+    national_3ren    NUMERIC,      -- 全国3連対率
+    local_win        NUMERIC,      -- 当地勝率
+    local_2ren       NUMERIC,
+    local_3ren       NUMERIC,
+    motor_no         INT,
+    motor_2ren       NUMERIC,
+    motor_3ren       NUMERIC,
+    boat_no          INT,
+    boat_2ren        NUMERIC,
+    boat_3ren        NUMERIC,
+    photo            TEXT,         -- CSV: photo_url
+    profile          TEXT,         -- CSV: profile_url
+    hayami_label     TEXT,         -- CSV: hayami（早見のテキスト）
+    hayami_href      TEXT,         -- CSV: hayami_href（早見リンク）
+    source_file      TEXT          -- 取り込み元ファイルパス
+);
+
+/*--- STAGING (レーサー統計テーブル) --------------------------*/
+CREATE TABLE IF NOT EXISTS raw.racertech_staging (
+    reg_no          INT,
+    name            TEXT,
+    course_label    TEXT,
+    starts          INT,
+    firsts          INT,
+    nige            INT,
+    sashi           INT,
+    makuri          INT,
+    makurisashi     INT,
+    nuki            INT,
+    megumare        INT,
+    source_file     TEXT
+);
+
+CREATE TABLE IF NOT EXISTS raw.racerstadium_staging (
+    reg_no          INT,
+    name            TEXT,
+    stadium_label   TEXT,
+    meeting_entries INT,
+    starts          INT,
+    firsts          INT,
+    winrate         NUMERIC,
+    first_rate      NUMERIC,
+    two_rate        NUMERIC,
+    three_rate      NUMERIC,
+    finalist_cnt    INT,
+    champion_cnt    INT,
+    avg_st          NUMERIC,
+    source_file     TEXT
+);
+
+CREATE TABLE IF NOT EXISTS raw.racerresult1_staging (
+    reg_no          INT,
+    name            TEXT,
+    grade           TEXT,
+    meeting_entries INT,
+    starts          INT,
+    firsts          INT,
+    winrate         NUMERIC,
+    first_rate      NUMERIC,
+    two_rate        NUMERIC,
+    three_rate      NUMERIC,
+    finalist_cnt    INT,
+    champion_cnt    INT,
+    avg_st          NUMERIC,
+    avg_st_rank     NUMERIC,
+    source_file     TEXT
+);
+
+CREATE TABLE IF NOT EXISTS raw.racerresult2_staging (
+    reg_no          INT,
+    name            TEXT,
+    grade           TEXT,
+    starts          INT,
+    firsts          INT,
+    seconds         INT,
+    thirds          INT,
+    fourths         INT,
+    fifths          INT,
+    sixths          INT,
+    s0              INT,
+    s1              INT,
+    s2              INT,
+    f_cnt           INT,
+    l0              INT,
+    l1              INT,
+    k0              INT,
+    k1              INT,
+    source_file     TEXT
+);
+
+CREATE TABLE IF NOT EXISTS raw.racercourse_staging (
+    reg_no          INT,
+    name            TEXT,
+    course_label    TEXT,
+    starts          INT,
+    firsts          INT,
+    first_rate      NUMERIC,
+    two_rate        NUMERIC,
+    three_rate      NUMERIC,
+    avg_st          NUMERIC,
+    avg_st_rank     NUMERIC,
+    source_file     TEXT
+);
+
+CREATE TABLE IF NOT EXISTS raw.racerboatcourse_staging (
+    reg_no          INT,
+    name            TEXT,
+    boat_no_label   TEXT,
+    starts          INT,
+    lane1_cnt       INT,
+    lane2_cnt       INT,
+    lane3_cnt       INT,
+    lane4_cnt       INT,
+    lane5_cnt       INT,
+    lane6_cnt       INT,
+    other_cnt       INT,
+    source_file     TEXT
+);
+
+CREATE TABLE IF NOT EXISTS raw.racerboat_staging (
+    reg_no          INT,
+    name            TEXT,
+    boat_no_label   TEXT,
+    starts          INT,
+    firsts          INT,
+    first_rate      NUMERIC,
+    two_rate        NUMERIC,
+    three_rate      NUMERIC,
+    finalist_cnt    INT,
+    champion_cnt    INT,
+    source_file     TEXT
+);
+
 /*--- 本テーブル --------------------------------------------*/
 CREATE TABLE IF NOT EXISTS raw.results (
     stadium        TEXT NOT NULL DEFAULT '若松',
     race_date      DATE NOT NULL,
     race_no        INT  NOT NULL,
     lane           INT  NOT NULL,
+    course         INT,
     position_txt   TEXT,
     racer_no       INT,
     st_time_raw    TEXT,
     source_file    TEXT
 );
 
-CREATE TABLE IF NOT EXISTS raw.racers (
+CREATE TABLE IF NOT EXISTS raw.beforeinfo (
     stadium        TEXT NOT NULL DEFAULT '若松',
     race_date      DATE NOT NULL,
     race_no        INT  NOT NULL,
@@ -109,8 +274,8 @@ CREATE TABLE IF NOT EXISTS raw.racers (
     adjust_weight  NUMERIC,
     exh_time       NUMERIC,
     tilt_deg       NUMERIC,
-    st_raw         TEXT,
-    st_entry       INT
+    st_time_raw         TEXT,
+    course         INT
 );
 
 CREATE TABLE IF NOT EXISTS raw.weather (
@@ -139,7 +304,7 @@ CREATE TABLE IF NOT EXISTS raw.person (
     class_hist2     TEXT,
     class_hist3     TEXT,
     ability_now     INT,
-    ability_prev    INT,
+    -- ability_prev    INT,
     "F_now"         INT,
     "L_now"         INT,
     winrate_natl    NUMERIC,
@@ -168,4 +333,146 @@ CREATE TABLE IF NOT EXISTS raw.person (
     boa_3rd         INT,
     boa_starts      INT,
     source_file     TEXT
+);
+
+CREATE TABLE IF NOT EXISTS raw.odds3t (
+    stadium        TEXT NOT NULL DEFAULT '若松',
+    race_date      DATE NOT NULL,
+    race_no        INT  NOT NULL,
+    first_lane     INT  NOT NULL,
+    second_lane    INT  NOT NULL,
+    third_lane     INT  NOT NULL,
+    odds           NUMERIC,
+    source_file    TEXT
+);
+
+CREATE TABLE IF NOT EXISTS raw.racelist_entries (
+    stadium        TEXT NOT NULL DEFAULT '若松',
+    race_date      DATE NOT NULL,
+    race_no        INT  NOT NULL,
+    lane           INT  NOT NULL,
+    jcd            INT,
+    place          TEXT,
+    title          TEXT,
+    day_label      TEXT,
+    distance_m     INT,
+    reg_no         INT,
+    grade          TEXT,
+    name           TEXT,
+    branch         TEXT,
+    birthplace     TEXT,
+    age            INT,
+    weight_raw     TEXT,
+    f_count        INT,
+    l_count        INT,
+    avg_st         NUMERIC,
+    national_win   NUMERIC,
+    national_2ren  NUMERIC,
+    national_3ren  NUMERIC,
+    local_win      NUMERIC,
+    local_2ren     NUMERIC,
+    local_3ren     NUMERIC,
+    source_file    TEXT
+);
+
+/*--- 本テーブル（レーサー統計） ----------------------------*/
+CREATE TABLE IF NOT EXISTS raw.racertech (
+    reg_no          INT,
+    course          INT,
+    starts          INT,
+    firsts          INT,
+    nige            INT,
+    sashi           INT,
+    makuri          INT,
+    makurisashi     INT,
+    nuki            INT,
+    megumare        INT
+);
+
+CREATE TABLE IF NOT EXISTS raw.racerstadium (
+    reg_no          INT,
+    stadium_code    TEXT,
+    meeting_entries INT,
+    starts          INT,
+    firsts          INT,
+    winrate         NUMERIC,
+    first_rate      NUMERIC,
+    two_rate        NUMERIC,
+    three_rate      NUMERIC,
+    finalist_cnt    INT,
+    champion_cnt    INT,
+    avg_st          NUMERIC
+);
+
+CREATE TABLE IF NOT EXISTS raw.racerresult1 (
+    reg_no          INT,
+    grade           TEXT,
+    meeting_entries INT,
+    starts          INT,
+    firsts          INT,
+    winrate         NUMERIC,
+    first_rate      NUMERIC,
+    two_rate        NUMERIC,
+    three_rate      NUMERIC,
+    finalist_cnt    INT,
+    champion_cnt    INT,
+    avg_st          NUMERIC,
+    avg_st_rank     NUMERIC
+);
+
+CREATE TABLE IF NOT EXISTS raw.racerresult2 (
+    reg_no          INT,
+    grade           TEXT,
+    starts          INT,
+    firsts          INT,
+    seconds         INT,
+    thirds          INT,
+    fourths         INT,
+    fifths          INT,
+    sixths          INT,
+    s0              INT,
+    s1              INT,
+    s2              INT,
+    f_cnt           INT,
+    l0              INT,
+    l1              INT,
+    k0              INT,
+    k1              INT
+);
+
+CREATE TABLE IF NOT EXISTS raw.racercourse (
+    reg_no          INT,
+    course          INT,
+    starts          INT,
+    firsts          INT,
+    first_rate      NUMERIC,
+    two_rate        NUMERIC,
+    three_rate      NUMERIC,
+    avg_st          NUMERIC,
+    avg_st_rank     NUMERIC
+);
+
+CREATE TABLE IF NOT EXISTS raw.racerboatcourse (
+    reg_no          INT,
+    lane            INT,
+    starts          INT,
+    lane1_cnt       INT,
+    lane2_cnt       INT,
+    lane3_cnt       INT,
+    lane4_cnt       INT,
+    lane5_cnt       INT,
+    lane6_cnt       INT,
+    other_cnt       INT
+);
+
+CREATE TABLE IF NOT EXISTS raw.racerboat (
+    reg_no          INT,
+    lane            INT,
+    starts          INT,
+    firsts          INT,
+    first_rate      NUMERIC,
+    two_rate        NUMERIC,
+    three_rate      NUMERIC,
+    finalist_cnt    INT,
+    champion_cnt    INT
 );

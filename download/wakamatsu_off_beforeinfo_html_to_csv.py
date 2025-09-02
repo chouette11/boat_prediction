@@ -16,7 +16,7 @@ import pandas as pd
 from bs4 import BeautifulSoup
 
 
-def parse_boat_race_html(html_path: str, encoding: str = "utf-8") -> None:
+def parse_boat_race_html(html_path: str, encoding: str = "utf-8", is_pred: bool = False) -> None:
     """BOAT RACE の『直前情報』ページ（PC 向け）からデータを抽出し CSV を生成する"""
     html_path = Path(html_path)
     soup = BeautifulSoup(html_path.read_text(encoding=encoding), "html.parser")
@@ -122,9 +122,9 @@ def parse_boat_race_html(html_path: str, encoding: str = "utf-8") -> None:
     st_data = []
     for i, div in enumerate(soup.select(".table1_boatImage1")):
         lane = div.select_one(".table1_boatImage1Number").get_text(strip=True)
-        entry = i + 1  # 進入
+        course = i + 1  # 進入
         st   = div.select_one(".table1_boatImage1Time").get_text(strip=True)
-        st_data.append({"lane": lane, "ST": st, "entry": entry})
+        st_data.append({"lane": lane, "ST": st, "course": course})
 
     if not st_data:
         csv_dir = "download/wakamatsu_off_beforeinfo_csv"
@@ -162,7 +162,11 @@ def parse_boat_race_html(html_path: str, encoding: str = "utf-8") -> None:
     # 6) CSV 出力
     # ------------------------------------------------------------------
     basename = html_path.stem
-    csv_dir = "download/wakamatsu_off_beforeinfo_csv"
+    html_dir = html_path.parent
+    print(html_dir)
+    # csv_dir = html_dir.replace("html", "csv")
+    if is_pred:
+        csv_dir = 'download/wakamatsu_off_beforeinfo_pred_csv'
     Path(csv_dir).mkdir(exist_ok=True)
     meta_df.to_csv(f"{csv_dir}/{basename}_meta.csv", index=False, encoding=encoding)
     # closing_df.to_csv(f"{csv_dir}/{basename}_closing_times.csv", index=False, encoding=encoding)
@@ -175,6 +179,7 @@ def parse_boat_race_html(html_path: str, encoding: str = "utf-8") -> None:
 if __name__ == "__main__":
     import os
     # htmlのファイルを取得
-    htmls = os.listdir("download/wakamatsu_off_beforeinfo_html")
+    dir_name = "download/wakamatsu_off_beforeinfo_html_2223"
+    htmls = os.listdir(dir_name)
     for html in htmls:
-        parse_boat_race_html(f"download/wakamatsu_off_beforeinfo_html/{html}", encoding="utf-8")
+        parse_boat_race_html(f"{dir_name}/{html}", encoding="utf-8")

@@ -43,15 +43,15 @@ def parse_results_table(soup: BeautifulSoup) -> list[dict[str, str]]:
     for i, unit in enumerate(soup.select(".table1_boatImage1")):
         lane = tidy((unit.select_one(".table1_boatImage1Number") or {}).get_text())
         txt = tidy((unit.select_one(".table1_boatImage1TimeInner") or {}).get_text())
-        entry = i + 1
-        print(f"Lane {lane} ST: {txt} (entry {entry})")
+        course = i + 1
+        print(f"Lane {lane} ST: {txt} (course {course})")
         if not lane:
             continue
         parts = txt.split()
         st_time = parts[0] if parts else ""
         tactic = parts[1] if len(parts) >= 2 else ""
         print(f"Lane {lane} ST: {st_time} Tactic: {tactic}")
-        st_map[lane] = (entry, st_time, tactic)
+        st_map[lane] = (course, st_time, tactic)
 
     rows: list[dict[str, str]] = []
 
@@ -71,7 +71,7 @@ def parse_results_table(soup: BeautifulSoup) -> list[dict[str, str]]:
         race_time = tidy(cells[3].get_text())
 
         print(st_map)
-        entry, st_time, tactic = st_map.get(lane, ("", "", ""))
+        course, st_time, tactic = st_map.get(lane, ("", "", ""))
         rows.append(
             {
                 "position_txt": position,
@@ -79,7 +79,7 @@ def parse_results_table(soup: BeautifulSoup) -> list[dict[str, str]]:
                 "racer_no": racer_no,
                 "racer_name": racer_name,
                 "time": race_time,
-                "st_entry": entry,
+                "course": course,
                 "st_time": st_time,
                 "tactic": tactic,
             }
@@ -139,14 +139,16 @@ def parse_weather(soup: BeautifulSoup) -> dict[str, str]:
 
 def main() -> None:
     import os
-    htmls = os.listdir("download/wakamatsu_off_raceresult_html")
-    csv_dir = Path("download/wakamatsu_off_raceresult_csv")
+    dir_name = "download/wakamatsu_off_raceresult_html_2223"
+    csv_dir_name = "download/wakamatsu_off_raceresult_csv_2223"
+    htmls = os.listdir(dir_name)
+    csv_dir = Path(csv_dir_name)
     csv_dir.mkdir(parents=True, exist_ok=True)
     for html in htmls:
         if not html.endswith(".html"):  
             print(f"Skipping non-HTML file: {html}")
             continue
-        input_html = Path(f"download/wakamatsu_off_raceresult_html/{html}")
+        input_html = Path(f"{dir_name}/{html}")
         print(f"Processing {input_html}...")
 
         soup = BeautifulSoup(input_html.read_text(encoding="utf-8", errors="ignore"), "html.parser")

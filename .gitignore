@@ -6,3 +6,7 @@ diff.patch
 *.pkl
 *.pt
 events.out.*
+*.pyc
+download/lzh/
+download/txt/
+*.pth

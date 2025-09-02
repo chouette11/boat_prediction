@@ -35,11 +35,11 @@ db_3:
 
 .PHONY: db_5
 db_5:
-	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql2/05_views_core.sql
+	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql/05_views_core.sql
 
 .PHONY: db_6
 db_6:
-	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql2/06_views_feat.sql
+	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql/06_views_feat.sql
 
 .PHONY: db_pred
 db_pred:
@@ -50,25 +50,6 @@ pred:
 	python download/download_pred.py
 	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql/100_pred.sql
 
-.PHONY: initdb
-initdb:
-	# ① データベースを削除
-	make db_drop
-	# ② データベースを作成
-	make db_create
-	# ③ スキーマを初期化
-	make db_init
-	# ④ データを流し込む
-	python sql/etl.py
-
-	# ⑤ マイグレーションを実行
-	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql/03_merge_staging.sql
-
-	# ⑥ ビューを作成
-	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql/99_init_wrapper.sql
-
-	python sql/confirm.py
-
 .PHONY: initalldb
 initalldb:
 	# ① データベースを削除
@@ -78,17 +59,9 @@ initalldb:
 	# ③ スキーマを初期化
 	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql2/01_schema.sql
 
+	# ④ データを流し込む
 	python sql2/parse_programs.py
 	python sql2/parse_results.py
-	python sql2/load_equip_cycle.py
-
-	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql2/02_tables_raw.sql
-
-	# ④ データを流し込む
-	python sql2/etl.py
-
-	# ⑤ マイグレーションを実行
-	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql2/03_merge_staging.sql
 
 	# ⑥ ビューを作成
 	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql2/05_views_core.sql

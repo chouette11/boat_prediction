@@ -1,7 +1,31 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[238]:
+# In[ ]:
+
+
+
+
+
+# In[ ]:
+
+
+
+
+
+
+
+# In[ ]:
+
+
+
+
+
+
+
+
+
+# In[ ]:
 
 
 get_ipython().run_line_magic('load_ext', 'autoreload')
@@ -23,7 +47,6 @@ import matplotlib.pyplot as plt
 from torch.utils.tensorboard import SummaryWriter
 import time
 from BoatRaceDataset2 import BoatRaceDataset     # ← MTL 対応版
-from DualHeadRanker import DualHeadRanker
 import itertools
 
 # --- reproducibility helpers ---
@@ -104,7 +127,7 @@ register_feature(FeatureDef("wind_sin", _wind_sin, deps=["wind_dir_deg"]))
 register_feature(FeatureDef("wind_cos", _wind_cos, deps=["wind_dir_deg"]))
 
 
-# In[239]:
+# In[ ]:
 
 
 import nbformat
@@ -138,8 +161,8 @@ DB_CONF = {
 # ------------------------------------------------------------------
 conn = psycopg2.connect(**DB_CONF)
 result_df = pd.read_sql("""
-    SELECT *
-    FROM feat.train_features3
+    SELECT * FROM feat.train_features3
+    WHERE race_date <= '2024-12-31'
 """, conn)
 
 
@@ -173,13 +196,11 @@ result_df = apply_features(result_df)
 
 exclude = []
 
-for lane in range(1, 7):
-      # --- 対象列を決める（ターゲット & キー列は除外） ---
-      exclude.append(
-            f"lane{lane}_bf_course",
-      )
-      exclude.append(f"lane{lane}_bf_st_time")
-
+# for lane in range(1, 7):
+#       # --- 対象列を決める（ターゲット & キー列は除外） ---
+#       exclude.append(
+#             f"lane{lane}_st",
+#       )
 
 result_df.drop(columns=exclude, inplace=True, errors="ignore")
 
@@ -219,7 +240,7 @@ scaler_filename = "artifacts/wind_scaler.pkl"
 joblib.dump(scaler, scaler_filename)
 
 
-# In[242]:
+# In[ ]:
 
 
 def encode(col):
@@ -231,7 +252,7 @@ venue2id = encode("venue")
 # race_type2id = encode("race_type")
 
 
-# In[243]:
+# In[ ]:
 
 
 # ============================================================
@@ -256,10 +277,11 @@ def peek_one(df: pd.DataFrame, seed: int = 0) -> None:
 
 # ---------------------------------------------
 # ここで一度だけ呼んで目視確認しておくとズレにすぐ気付けます
-# peek_one(result_df)
+peek_one(result_df)
 # ============================================================
 
 
+LANE_DIM = 8
 # ---------------- Loss / Regularization Weights -----------------
 LAMBDA_ST = 0.1      # weight for ST‑MSE  (was 0.3)
 L1_ALPHA  = 0.02     # weight for rank‑L1 loss
@@ -268,8 +290,64 @@ RANKNET_ALPHA = 0.10   # weight for pairwise RankNet loss
 TEMPERATURE   = 0.80   # logits are divided by T at inference
 LAMBDA_WIN = 1.0        # weight for winner‑BCE loss
 
+class DualHeadRanker(nn.Module):
+    """
+    ctx(6) + boat(6) → lane ごとにスコア 1 個
+    """
+    def __init__(self, ctx_in=6, boat_in=6, hidden=160, lane_dim=LANE_DIM):
+        super().__init__()
+        self.lane_emb = nn.Embedding(6, lane_dim)
+        self.ctx_fc   = nn.Linear(ctx_in, hidden)
+        self.boat_fc  = nn.Linear(boat_in + lane_dim, hidden)
+        self.head_rank = nn.Sequential(
+            nn.Linear(hidden, hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, 1)
+        )
+        self.head_st = nn.Sequential(
+            nn.Linear(hidden, hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, 1)
+        )
+        self.head_win = nn.Sequential(
+            nn.Linear(hidden, hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, 1)
+        )
 
-# In[244]:
+        # 重み初期化を対称性ブレイク用に Xavier で揃える
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                nn.init.zeros_(m.bias)
+
+    def forward(self, ctx, boats, lane_ids):  # boats:(B,6,4) lane_ids:(B,6)
+        B, L, _ = boats.size()
+        ctx_emb  = self.ctx_fc(ctx)          # (B,h)
+
+        if lane_ids.dim() == 1:
+            lane_ids = lane_ids.unsqueeze(1).expand(-1, L)
+        elif lane_ids.dim() == 2 and lane_ids.size(1) == 1:
+            lane_ids = lane_ids.expand(-1, L)
+        lane_ids = lane_ids.contiguous()
+
+        lane_emb = self.lane_emb(lane_ids)   # (B,6,lane_dim)
+        boat_inp = torch.cat([boats, lane_emb], dim=-1)
+        boat_emb = self.boat_fc(boat_inp)    # (B,6,h)
+
+        h = torch.tanh(ctx_emb.unsqueeze(1) + boat_emb)  # (B,6,h)
+
+        st_pred   = self.head_st(h).squeeze(-1)     # (B,6)
+        rank_pred = self.head_rank(h).squeeze(-1)   # (B,6)
+        win_logits = self.head_win(h).squeeze(-1)   # (B,6)
+        return st_pred, rank_pred, win_logits
+
+# --- alias for legacy references ---
+SimpleCPLNet = DualHeadRanker
+
+
+
+# In[ ]:
 
 
 def pl_nll(scores: torch.Tensor, ranks: torch.Tensor, reduce: bool = True) -> torch.Tensor:
@@ -322,7 +400,7 @@ ranks  = torch.tensor([[1, 2, 3, 4, 5, 6]], dtype=torch.int64)    # lane0 が 1 
 print("pl_nll should be ~0 :", pl_nll(scores, ranks).item())
 
 
-# In[245]:
+# In[ ]:
 
 
 result_df["race_date"] = pd.to_datetime(result_df["race_date"]).dt.date
@@ -343,7 +421,7 @@ model = DualHeadRanker(boat_in=boat_dim).to(device)
 opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=5e-5)
 
 
-# In[246]:
+# In[ ]:
 
 
 # # ------------------------- quick diagnostics --------------------------
@@ -457,7 +535,7 @@ def evaluate_model(model, dataset, device):
 #     print("[diag]   ► finished quick diagnostics\n")
 
 
-# In[247]:
+# In[ ]:
 
 
 # ---------------------------------------------------------------------
@@ -661,6 +739,8 @@ for epoch in range(EPOCHS):
                                     columns=[f"prob_lane{i}" for i in range(1,7)])
             df_probs["winner"] = winner_idx
             probs_path = "artifacts/raw_probs_val.csv"
+            df_probs.to_csv(probs_path, index=False)
+            print(f"[export] raw_probs saved → {probs_path}")
 
     # ---- 学習ログを CSV へ追記保存 ----
     import csv
@@ -682,22 +762,15 @@ for epoch in range(EPOCHS):
 # --- Close TensorBoard writer after training ---
 writer.close()
 
-# modelの保存
-now = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-os.makedirs("artifacts/models", exist_ok=True)
-model_path = f"artifacts/models/model_{now}.pth"
-torch.save(model.state_dict(), model_path)
-print(f"Model saved to {model_path}")
 
 
-# In[248]:
+# In[ ]:
 
 
 # ---- Monkey‑patch ROIAnalyzer so it uses BoatRaceDataset2 (MTL) ----------
 from types import MethodType
 from BoatRaceDataset2 import BoatRaceDataset as BR2Dataset
 from torch.utils.data import DataLoader
-
 
 class _EvalDatasetMTL(torch.utils.data.Dataset):
     """
@@ -717,32 +790,20 @@ def _create_loader_mtl(self, df_eval: pd.DataFrame):
     df = self.preprocess_df(df_eval, self.scaler, self.num_cols)
     ds_eval = _EvalDatasetMTL(df)
     loader = DataLoader(ds_eval, batch_size=self.batch_size, shuffle=False)
-
-    need_cols = ["first_lane", "second_lane", "third_lane"]
-    if all(c in df.columns for c in need_cols):
-        lanes_np = df[need_cols].to_numpy(dtype=np.int64) - 1
-    else:
-        # 予測テーブルでは真の1〜3着が無いのが普通。ダミー(0,1,2)で形だけ満たす
-        lanes_np = np.tile(np.array([0, 1, 2], dtype=np.int64), (len(df), 1))
+    lanes_np = df[["first_lane", "second_lane", "third_lane"]].to_numpy(dtype=np.int64) - 1
     return loader, df, lanes_np
 
 import roi_util as _roi_util_mod
 _roi_util_mod.ROIAnalyzer._create_loader = _create_loader_mtl
+_roi_util_mod.ROIPredictor._create_loader = _create_loader_mtl
 
-from roi_util import ROIAnalyzer
+from roi_util import ROIAnalyzer, ROIPredictor
 
 
-#  # 最新のモデルを取得
-# model_list = os.listdir("artifacts/models")
-# model_list = [f for f in model_list if f.endswith(".pth")]
-# if model_list:
-#     latest_model = sorted(model_list)[-1]  # 最新のモデルを選択
-#     model_path = os.path.join("artifacts", "models", latest_model)
-#     print(f"Using latest model: {model_path}")
-#     # モデルをロード
-#     model = DualHeadRanker(boat_in=boat_dim)
-#     model.load_state_dict(torch.load(model_path, map_location=device))
-
+"""
+Fetch last 90‑day races, compute edge & Kelly strategy,
+and output ROI / PnL statistics + equity curve.
+"""
 today = dt.date.today()
 # 2025年1月1日以降のデータを取得する場合は、以下の行を変更してください。
 start_date = dt.date(2025, 1, 1)
@@ -775,7 +836,6 @@ class _RankOnly(nn.Module):
 
 # ----- metrics & equity (best‑practice defaults) -----
 rank_model = _RankOnly(model).to(device)
-
 analyzer = ROIAnalyzer(model=rank_model, scaler=scaler,
                        num_cols=NUM_COLS, device=device)
 
@@ -791,6 +851,9 @@ df_trifecta_met.to_csv("artifacts/metrics_trifecta.csv", index=False)
 # hitが True の行だけを抽出
 df_trifecta_met_hit = df_trifecta_met[df_trifecta_met["hit"] == True]
 df_trifecta_met_hit.to_csv("artifacts/metrics_trifecta_hit.csv", index=False)
+
+
+
 
 df_trifecta_eq = ROIAnalyzer.compute_equity_curve(
     df_trifecta_met,
@@ -812,7 +875,7 @@ ROIAnalyzer.plot_equity_curve(
 )
 
 
-# In[249]:
+# In[ ]:
 
 
 # --- 予測でも「自信度」と「正解三連単の順位」を評価し、CSV に記録 ---
@@ -823,289 +886,403 @@ loader_eval, _df_eval_proc, _lanes = analyzer._create_loader(df_recent)
 
 # 既に上で用意した rank_model は「rank_pred だけ」を返すアダプタ
 model.eval(); rank_model.eval()
-all_scores, all_ranks, all_keys = [], [], []
-
-row_ptr = 0
+all_scores, all_ranks = [], []
 with torch.no_grad():
     for ctx, boats, lane_ids, ranks in loader_eval:
         ctx, boats, lane_ids = ctx.to(device), boats.to(device), lane_ids.to(device)
-        scores = rank_model(ctx, boats, lane_ids)
-        B = scores.size(0)
-
-        # --- core outputs ---
+        scores = rank_model(ctx, boats, lane_ids)  # (B,6) already scaled
         all_scores.append(scores.cpu())
         all_ranks.append(ranks)
-
-        # --- meta values (race_key / odds) ---
-        all_keys.extend(_df_eval_proc["race_key"].iloc[row_ptr : row_ptr + B].tolist())
-        row_ptr += B
-
 
 all_scores = torch.cat(all_scores, dim=0)   # (N,6)
 all_ranks  = torch.cat(all_ranks,  dim=0)   # (N,6)
 
 
-# In[250]:
+# In[ ]:
 
 
-# all_ranksとall_scoresを結合したdfに変換
-df_scores = pd.DataFrame(all_scores.numpy(), columns=[f"lane{i+1}_score" for i in range(6)])
-df_ranks = pd.DataFrame(all_ranks.numpy(), columns=[f"lane{i+1}_rank" for i in range(6)])
-df_score_ranks = pd.concat([df_scores, df_ranks], axis=1)   
-df_score_ranks["race_key"] = all_keys
+# ---------- helper metrics ----------
+def top1_accuracy(scores: torch.Tensor, ranks: torch.Tensor) -> float:
+    pred_top1 = scores.argmax(dim=1)
+    true_top1 = (ranks == 1).nonzero(as_tuple=True)[1]
+    return (pred_top1 == true_top1).float().mean().item()
 
-# df_mergedから重複行を削除
-df_score_ranks = df_score_ranks.drop_duplicates()
+def trifecta_hit_rate(scores: torch.Tensor, ranks: torch.Tensor) -> float:
+    """
+    予測スコア上位3艇の順番が、実際の1〜3着と完全一致する割合。
+    """
+    pred_top3 = torch.topk(scores, k=3, dim=1).indices
+    true_top3 = torch.topk(-ranks, k=3, dim=1).indices  # 小さい順に 1→3 着
+    hit = [p.tolist() == t.tolist() for p, t in zip(pred_top3, true_top3)]
+    return float(sum(hit) / len(hit)) if len(hit) else float("nan")
 
-# merge odds from df_trifecta_met_hit by race_key
-df_score_ranks = df_score_ranks.merge(df_trifecta_met_hit[["race_key","odds"]], on="race_key", how="left")
+# --- Baseline: always predict trifecta 1-2-3 (lanes 1→2→3) ------------------
+def constant_123_trifecta_hit(ranks: torch.Tensor) -> float:
+    """
+    Hit‑rate when always predicting trifecta 1‑2‑3 in order.
+    """
+    true_top3 = torch.topk(-ranks, k=3, dim=1).indices   # (B,3)
+    baseline  = torch.tensor([0, 1, 2], dtype=torch.long, device=ranks.device)
+    return (true_top3 == baseline).all(dim=1).float().mean().item()
 
-# --- lane 列をまとめて list 化 ---
-score_cols = [f"lane{i}_score" for i in range(1, 7)]
-rank_cols  = [f"lane{i}_rank"  for i in range(1, 7)]
+def baseline123_position_accuracy(ranks: torch.Tensor, pos: int) -> float:
+    """
+    Baseline per‑position accuracy when assuming boat pos finishes pos‑th.
+    pos ∈ {1,2,3}
+    """
+    true_idx = (ranks == pos).float().argmax(dim=1)          # (B,)
+    baseline_idx = torch.tensor(pos - 1, dtype=torch.long, device=ranks.device)
+    return (true_idx == baseline_idx).float().mean().item()
 
-df_score_ranks["scores"] = df_score_ranks[score_cols].apply(
-    lambda r: [float(x) for x in r.values.tolist()], axis=1
-)
-df_score_ranks["ranks"] = df_score_ranks[rank_cols].apply(
-    lambda r: [int(x) for x in r.values.tolist()], axis=1
-)
+def baseline123_top3_unordered_hit(ranks: torch.Tensor) -> float:
+    """
+    Order‑agnostic hit‑rate when always predicting the set {1,2,3}.
+    """
+    true_top3 = torch.topk(-ranks, k=3, dim=1).indices
+    hit = [set(t.tolist()) == {0,1,2} for t in true_top3]
+    return float(sum(hit) / len(hit))
 
 from itertools import permutations
 
-def pl_true_order_prob(scores, ranks):
+def get_trifecta_rank(scores: torch.Tensor, true_ranks: torch.Tensor) -> list[int]:
+    """真の三連単が、全 120 通りの予測候補の中で何番目か（1 始まり）を返す。"""
+    perms = list(permutations(range(6), 3))
+    res = []
+    for sc, tr in zip(scores, true_ranks):
+        true_top3 = [i for i, r in enumerate(tr.tolist()) if r <= 3]
+        true_top3_sorted = [x for _, x in sorted(zip(tr[true_top3], true_top3))]
+        perm_scores = [(p, sc[list(p)].sum().item()) for p in perms]
+        perm_scores.sort(key=lambda x: x[1], reverse=True)
+        for idx, (p, _) in enumerate(perm_scores):
+            if list(p) == true_top3_sorted:
+                res.append(idx + 1)
+                break
+        else:
+            res.append(len(perms) + 1)
+    return res
+
+# --- Added: strict (order-respecting) trifecta rank ---
+def get_trifecta_rank_ordered(scores: torch.Tensor, true_ranks: torch.Tensor) -> list[int]:
+    perms = list(permutations(range(6), 3))
+    res = []
+    exp_scores = torch.exp(scores)         # (N,6)
+    for es, tr in zip(exp_scores, true_ranks):
+        # true indices for 1st→3rd in correct order
+        ordered_true = sorted(range(6), key=lambda i: tr[i].item())[:3]
+
+        denom0 = es.sum().item()
+        perm_probs = []
+        for p in perms:
+            p0, p1, p2 = p
+            denom1 = denom0
+            denom2 = denom1 - es[p0].item()
+            denom3 = denom2 - es[p1].item()
+            prob = (es[p0] / denom1) * (es[p1] / denom2) * (es[p2] / denom3)
+            perm_probs.append((p, prob.item()))
+
+        perm_probs.sort(key=lambda x: x[1], reverse=True)
+        for idx, (p, _) in enumerate(perm_probs):
+            if list(p) == ordered_true:
+                res.append(idx + 1)        # 1‑based
+                break
+        else:
+            res.append(len(perms) + 1)     # fallback (shouldn't happen)
+    return res
+
+
+# ---------- extra metrics ----------
+def top3_unordered_hit_rate(scores: torch.Tensor, ranks: torch.Tensor) -> float:
     """
-    Plackett–Luce で '真の完全着順(1→6位)' の確率を計算。
-    scores: 長さ6のスコア配列, ranks: 長さ6の真の順位 (1=最上位)
+    True if the model's top‑3 set matches the actual top‑3 set (order‑agnostic).
     """
-    w = np.exp(np.array(scores, dtype=float))
-    # 真の順序（1→2→…→6）に並んだインデックス
-    order = [i for i, _ in sorted(enumerate(ranks), key=lambda t: t[1])]
-    denom = float(w.sum())
-    p = 1.0
-    for idx in order:
-        if denom <= 0:
-            return 0.0
-        p *= float(w[idx] / denom)
-        denom -= float(w[idx])
-    return float(p)
+    pred_top3 = torch.topk(scores, k=3, dim=1).indices
+    true_top3 = torch.topk(-ranks, k=3, dim=1).indices
+    hit = [(set(p.tolist()) == set(t.tolist())) for p, t in zip(pred_top3, true_top3)]
+    return float(sum(hit) / len(hit))
 
-# 6! (=720) 通りの全順位
-ALL_PERMS = list(permutations(range(6), 6))
-
-def true_order_rank(scores, ranks):
+def mean_reciprocal_rank(scores: torch.Tensor, ranks: torch.Tensor) -> float:
     """
-    全 6! 通りの PL 確率で並べたとき、真の完全順位が何番目か（1始まり）。
+    MRR of predicting the winner (1着).
     """
-    w = np.exp(np.array(scores, dtype=float))
-    denom0 = float(w.sum())
-    true_perm = tuple(i for i, _ in sorted(enumerate(ranks), key=lambda t: t[1]))
+    order = scores.argsort(dim=1, descending=True)          # (B,6)
+    true_winner_idx = (ranks == 1).nonzero(as_tuple=True)[1]
+    rank_pos = (order == true_winner_idx.unsqueeze(1)).nonzero(as_tuple=True)[1] + 1  # 1‑based
+    return (1.0 / rank_pos.float()).mean().item()
 
-    def prob_of_perm(perm):
-        denom = denom0
-        p = 1.0
-        for idx in perm:
-            if denom <= 0:
-                return 0.0
-            p *= float(w[idx] / denom)
-            denom -= float(w[idx])
-        return p
+def spearman_corr(scores: torch.Tensor, ranks: torch.Tensor) -> float:
+    """
+    Average per‑race Spearman rank correlation between predicted and true rank orders.
+    """
+    pred_rank = scores.argsort(dim=1, descending=True).argsort(dim=1).float() + 1  # 1..6
+    true_rank = ranks.float()
+    d = pred_rank - true_rank
+    rho = 1 - 6 * (d ** 2).sum(dim=1) / (6 * (6**2 - 1))
+    return rho.mean().item()
 
-    probs = [(perm, prob_of_perm(perm)) for perm in ALL_PERMS]
-    probs.sort(key=lambda x: x[1], reverse=True)
-
-    for k, (perm, _) in enumerate(probs, start=1):
-        if perm == true_perm:
-            return k
-    return len(probs) + 1  # 通常は到達しない
-
-# 列の追加
-df_score_ranks["true_order_prob"] = df_score_ranks.apply(
-    lambda row: pl_true_order_prob(row["scores"], row["ranks"]), axis=1
-)
-df_score_ranks["true_order_rank"] = df_score_ranks.apply(
-    lambda row: true_order_rank(row["scores"], row["ranks"]), axis=1
-)
-
-# 保存
-df_score_ranks.to_csv("artifacts/merged_scores_ranks.csv", index=False)
-
-# df_score_ranksを行でループ
-total_benefit = 0.0
-total_submit = 0.0
-for n in range(1, 30):
-    for index, row in df_score_ranks.iterrows():
-        total_submit += 100 * n
-        odds = row.get("odds", None)
-        true_rank = row.get("true_order_rank", None)
-        if true_rank <= 1 * n:
-            total_benefit += odds * 100
-
-    print(f"n = {n}")
-    print(f"roi : {total_benefit / total_submit * 100:.2f}%")
+def trifecta_rank_pl(scores: torch.Tensor, true_ranks: torch.Tensor) -> list[int]:
+    """Plackett-Luce 確率で並べた三連単順位を返す（exact order）。"""
+    perms = list(permutations(range(6), 3))
+    exp_s = torch.exp(scores)
+    res = []
+    for sc, tr in zip(exp_s, true_ranks):
+        # 真の順序 (1→2→3 着)
+        idx123 = [x for _, x in sorted(zip(tr.tolist(), range(6)))][:3]
+        # PL確率を計算
+        probs = []
+        for p in perms:
+            # 第1着
+            denom1 = sc.sum()
+            p1 = sc[p[0]] / denom1
+            # 第2着
+            denom2 = (sc.sum() - sc[p[0]])
+            p2 = sc[p[1]] / denom2
+            # 第3着
+            denom3 = (sc.sum() - sc[p[0]] - sc[p[1]])
+            p3 = sc[p[2]] / denom3
+            probs.append((p, (p1*p2*p3).item()))
+        probs.sort(key=lambda x: x[1], reverse=True)
+        rank = next(i for i,(p,_) in enumerate(probs) if list(p)==idx123) + 1
+        res.append(rank)
+    return res
 
 
+new_df = pd.DataFrame(columns=["race_index", "true_order", "perm_probs", "match_index"])
 
-# In[251]:
+for i in range(0, len(all_scores), 120):  # 129〜133 レースを表示
+    sc   = all_scores[i]
+    true = all_ranks[i]
 
+    ordered_true = sorted(range(6), key=lambda k: true[k].item())[:3]
+    # print(f"\nRace {i}")
+    # print(" true order :", ordered_true)
 
-# === 条件別ヒット率/ROI 分析 ================================
-# 目的: 「どんな条件のときに当たりやすいか？」を、ヒット率とROIで可視化
-# 入力: result_df（race_key, odds, match_index を含む）/ df_recent（環境・会場などの特徴）
-# 出力: artifacts/cond_base_table.csv, artifacts/cond_hit_roi.csv
-# -------------------------------------------------------------
-import math
-from itertools import permutations
-print("[cond] 条件別の当たりやすさ分析を開始…")
+    # PL順で上位5件
+    perms = list(permutations(range(6), 3))
+    es = torch.exp(sc)
+    denom0 = es.sum().item()
+    perm_probs = []
+    for p in perms:
+        d2 = denom0 - es[p[0]].item()
+        d3 = d2     - es[p[1]].item()
+        prob = (es[p[0]] / denom0) * (es[p[1]] / d2) * (es[p[2]] / d3)
+        perm_probs.append((p, prob.item()))
+    perm_probs.sort(key=lambda x: x[1], reverse=True)
+    # print(" top-5 by PL :", perm_probs[:5])
 
-# 0) ベース表の構築（分析に使う列をまとめる）
-_base = result_df.copy()
-_base = _base[_base["race_key"].notna()].copy()
-_base["match_index"] = pd.to_numeric(_base["match_index"], errors="coerce")
-_base["odds"] = pd.to_numeric(_base["odds"], errors="coerce")
+    # 正解三連単が何番目に出たか
+    true_order_tuple = tuple(ordered_true)
+    match_index = next((j for j, (order, _) in enumerate(perm_probs) if order == true_order_tuple), -1)
+    # print(f'matched: {match_index + 1}')
 
-# df_recent から環境や会場などの列をマージ（存在する列だけ）
-_cand_cols = [
-    "race_key", "venue", "air_temp", "water_temp",
-    "wind_speed", "wave_height", "wind_dir_deg", "wind_sin", "wind_cos",
-]
-_exist_cols = [c for c in _cand_cols if c in df_recent.columns]
-if _exist_cols:
-    _env = df_recent[_exist_cols].drop_duplicates("race_key")
-    _base = _base.merge(_env, on="race_key", how="left")
+    # new_dfに追加
+    new_df.loc[len(new_df)] = {
+        "race_index": i,
+        "true_order": ordered_true,
+        "perm_probs": perm_probs[:5],  # 上位5件の確率も保存
+        "match_index": match_index + 1  # 1-indexed にして表示
+    }
 
-# 1) 予測スコア由来の「自信度」特徴を付与（PLのtop1確率・top2とのギャップ等）
-try:
-    _scores_mat = all_scores.detach().cpu().numpy()  # (N,6)
-    _rk_seq = _df_eval_proc["race_key"].to_numpy()
-except Exception as e:
-    print("[cond] all_scores が見つからない/使えないため再計算します:", e)
-    loader_eval, _df_eval_proc, _ = analyzer._create_loader(df_recent)
-    model.eval(); rank_model.eval()
-    _sc_list = []
-    with torch.no_grad():
-        for ctx, boats, lane_ids, _ranks in loader_eval:
-            ctx, boats, lane_ids = ctx.to(device), boats.to(device), lane_ids.to(device)
-            _sc = rank_model(ctx, boats, lane_ids)
-            _sc_list.append(_sc.cpu())
-    all_scores = torch.cat(_sc_list, dim=0)
-    _scores_mat = all_scores.numpy()
-    _rk_seq = _df_eval_proc["race_key"].to_numpy()
-
-_scores_df = pd.DataFrame(_scores_mat, columns=[f"s{i}" for i in range(6)])
-_scores_df["race_key"] = _rk_seq
-_perms = list(permutations(range(6), 3))
-
-def _pl_feats_from_scores(row):
-    s = np.array([row[f"s{i}"] for i in range(6)], dtype=float)
-    es = np.exp(s)
-    denom0 = es.sum()
-    # lane softmax のエントロピー（低いほど確信強）
-    p = es / max(denom0, 1e-9)
-    entropy = float(-(p * np.log(p + 1e-12)).sum())
-    var = float(np.var(s))
-    # 全120通りのPL確率から top1 / top2 とギャップ
-    best1p, best2p = -1.0, -1.0
-    best1 = None
-    for a, b, c in _perms:
-        d2 = denom0 - es[a]
-        d3 = d2 - es[b]
-        if d2 <= 0 or d3 <= 0:
-            continue
-        prob = (es[a]/denom0) * (es[b]/d2) * (es[c]/d3)
-        if prob > best1p:
-            best2p = best1p
-            best1p = float(prob)
-            best1 = (a, b, c)
-        elif prob > best2p:
-            best2p = float(prob)
-    gap = best1p - best2p if best2p >= 0 else np.nan
-    top1_str = f"{best1[0]+1}-{best1[1]+1}-{best1[2]+1}" if best1 is not None else np.nan
-    return pd.Series({
-        "pl_top1_prob": best1p,
-        "pl_top2_prob": best2p,
-        "pl_gap": gap,
-        "pl_top1": top1_str,
-        "score_entropy": entropy,
-        "score_var": var,
-    })
-
-_pl_feats = _scores_df.apply(_pl_feats_from_scores, axis=1)
-_scores_df = pd.concat([_scores_df[["race_key"]], _pl_feats], axis=1)
-_base = _base.merge(_scores_df, on="race_key", how="left")
-
-# 2) 条件のビニング
-def _safe_qcut(series, q):
+# --- normalize true_order to merge keys (0-based & 1-based) -------------
+def _to_tuple3(obj):
+    """Return first 3 ints as a tuple, or (np.nan,np.nan,np.nan)."""
+    import numpy as _np
+    if isinstance(obj, str):
+        s = obj.strip().strip("[](){}")
+        parts = [p for p in s.replace(',', ' ').split() if p]
+        vals = []
+        for p in parts:
+            try:
+                vals.append(int(p))
+            except ValueError:
+                pass
+        if len(vals) >= 3:
+            return (int(vals[0]), int(vals[1]), int(vals[2]))
+        return (_np.nan, _np.nan, _np.nan)
+    elif isinstance(obj, (list, tuple, np.ndarray)):
+        if len(obj) >= 3:
+            return (int(obj[0]), int(obj[1]), int(obj[2]))
+        return (_np.nan, _np.nan, _np.nan)
+    else:
+        return (_np.nan, _np.nan, _np.nan)
+    
+# --- safe key builder to avoid 'bool is not iterable' on NaN ---
+def _key_str_from_tuple3(t, offset=0):
+    """Return 'a-b-c' with optional +offset (0 or 1). If invalid, NaN."""
     try:
-        return pd.qcut(series, q=q, duplicates="drop")
+        a, b, c = t[0], t[1], t[2]
     except Exception:
-        return pd.Series([np.nan] * len(series), index=series.index)
+        return np.nan
+    if pd.isna(a) or pd.isna(b) or pd.isna(c):
+        return np.nan
+    try:
+        return f"{int(a)+offset}-{int(b)+offset}-{int(c)+offset}"
+    except Exception:
+        return np.nan
 
-if "odds" in _base.columns:
-    _base["odds_bin"] = _safe_qcut(_base["odds"], 5)
-if "pl_top1_prob" in _base.columns:
-    _base["pl_prob_bin"] = _safe_qcut(_base["pl_top1_prob"], 4)
-if "pl_gap" in _base.columns:
-    _base["gap_bin"] = _safe_qcut(_base["pl_gap"], 4)
-if "wind_speed" in _base.columns:
-    _base["wind_bin"] = pd.cut(_base["wind_speed"], bins=[-np.inf, 2, 4, 6, 8, np.inf], right=False)
-if "wave_height" in _base.columns:
-    _base["wave_bin"] = pd.cut(_base["wave_height"], bins=[-np.inf, 0.5, 1.0, 2.0, np.inf], right=False)
-if "wind_sin" in _base.columns:
-    _base["tailwind"] = _base["wind_sin"] < 0  # True=追い風（sin<0）
+# new_df keys
+new_df["_tuple0"] = new_df["true_order"].apply(_to_tuple3)   # likely 0-based
+new_df["key0"] = new_df["_tuple0"].apply(lambda t: _key_str_from_tuple3(t, offset=0))
+new_df["key1"] = new_df["_tuple0"].apply(lambda t: _key_str_from_tuple3(t, offset=1))
 
-# 3) 条件ごとのヒット率/ROI を集計
-def _summarize_by(col, top_n, min_n=30):
-    if col not in _base.columns:
-        return pd.DataFrame()
-    df = _base.dropna(subset=[col, "match_index", "odds"]).copy()
-    if df.empty:
-        return pd.DataFrame()
-    grp = df.groupby(col, dropna=False)
-    out = grp.apply(lambda g: pd.Series({
-        "n": len(g),
-        "hit_rate": float((g["match_index"] <= top_n).mean()),
-        "roi": float((g.loc[g["match_index"] <= top_n, "odds"].sum() - len(g) * top_n) / (len(g) * top_n)),
-        "avg_odds_on_hits": float(g.loc[g["match_index"] <= top_n, "odds"].mean()) if (g["match_index"] <= top_n).any() else np.nan,
-    })).reset_index()
-    out = out[out["n"] >= min_n].copy()
-    if out.empty:
-        return out
-    out["top_n"] = top_n
-    out["condition"] = col
-    return out.sort_values(["roi", "hit_rate"], ascending=False)
-
-_cols_to_try = [
-    "odds_bin", "pl_prob_bin", "gap_bin",
-    "wind_bin", "wave_bin", "tailwind",
-]
-_tables = []
-for _n in [1, 3, 5]:
-    for _c in _cols_to_try:
-        if _c in _base.columns:
-            _t = _summarize_by(_c, _n, min_n=30)
-            if not _t.empty:
-                _tables.append(_t)
-    if "venue" in _base.columns:
-        _t = _summarize_by("venue", _n, min_n=50)
-        if not _t.empty:
-            _tables.append(_t)
-
-_cond_result = pd.concat(_tables, ignore_index=True) if _tables else pd.DataFrame()
-
-# 4) 保存
-os.makedirs("artifacts", exist_ok=True)
-_base.to_csv("artifacts/cond_base_table.csv", index=False)
-_cond_result.to_csv("artifacts/cond_hit_roi.csv", index=False)
-
-# 5) コンソールにハイライト表示
-if not _cond_result.empty:
-    with pd.option_context("display.max_rows", 20, "display.max_colwidth", 60):
-        print("[cond] 上位の条件例 (top_n=3, ROI順 上位10)")
-        print(_cond_result.query("top_n==3").sort_values("roi", ascending=False).head(10))
+# if "true_order" in _hit.columns: ブランチ内
+# df_trifecta_met_hit keys (support multiple schemas)
+_hit = df_trifecta_met_hit.copy()
+if "true_order" in _hit.columns:
+    _hit["_tuple0"] = _hit["true_order"].apply(_to_tuple3)
+    _hit["key0"] = _hit["_tuple0"].apply(lambda t: _key_str_from_tuple3(t, offset=0))
+    _hit["key1"] = _hit["_tuple0"].apply(lambda t: _key_str_from_tuple3(t, offset=1))
+elif set(["first_lane","second_lane","third_lane"]).issubset(_hit.columns):
+    # lanes are typically 1-based → key1 そのまま、key0 は -1
+    _hit[["first_lane","second_lane","third_lane"]] = _hit[["first_lane","second_lane","third_lane"]].astype(int)
+    _hit["key1"] = _hit[["first_lane","second_lane","third_lane"]].astype(str).agg('-'.join, axis=1)
+    _hit["key0"] = (_hit[["first_lane","second_lane","third_lane"]] - 1).astype(int).astype(str).agg('-'.join, axis=1)
+elif set(["true_order1","true_order2","true_order3"]).issubset(_hit.columns):
+    _hit[["true_order1","true_order2","true_order3"]] = _hit[["true_order1","true_order2","true_order3"]].astype(int)
+    _hit["key1"] = _hit[["true_order1","true_order2","true_order3"]].astype(str).agg('-'.join, axis=1)
+    _hit["key0"] = (_hit[["true_order1","true_order2","true_order3"]] - 1).astype(int).astype(str).agg('-'.join, axis=1)
 else:
-    print("[cond] 条件別集計を作成できませんでした（対象列やデータ不足）。")
-# ============================================================
+    raise KeyError("df_trifecta_met_hit から true_order のキーを作れませんでした。対応する列が見つかりません。")
+
+if "race_key" not in _hit.columns:
+    raise KeyError("df_trifecta_met_hit に 'race_key' 列がありません")
+
+# race_key 昇順で true_order ごと代表1件（重複対策）
+map0 = (
+    _hit.dropna(subset=["race_key"]).copy()
+        .sort_values(["race_key", "odds"], kind="mergesort")
+        .drop_duplicates(subset=["key0"], keep="first")
+        [["key0", "race_key", "odds"]]
+        .rename(columns={"race_key": "race_key_0", "odds": "odds_0"})
+)
+map1 = (
+    _hit.dropna(subset=["race_key"]).copy()
+        .sort_values(["race_key", "odds"], kind="mergesort")
+        .drop_duplicates(subset=["key1"], keep="first")
+        [["key1", "race_key", "odds"]]
+        .rename(columns={"race_key": "race_key_1", "odds": "odds_1"})
+)
+
+# 2段階マージ（まず 0-based、未マッチは 1-based で補完）
+merged = new_df.merge(map0, on="key0", how="left")
+merged = merged.merge(map1, on="key1", how="left")
+merged["race_key"] = merged["race_key_0"].fillna(merged["race_key_1"])
+merged["odds"]     = merged["odds_0"].fillna(merged["odds_1"])
+merged.drop(columns=["race_key_0","race_key_1","odds_0","odds_1"], inplace=True)
+
+# 参考: マッチ率を出力
+matched = merged["race_key"].notna().sum()
+print(f"[merge] matched rows: {matched} / {len(merged)} ({matched/len(merged):.1%})")
+
+# race_index が重複する場合のみ、race_key 昇順で先頭 1 件を採用
+result_df = (
+    merged
+    .sort_values(["race_index", "race_key", "odds"], na_position="last", kind="mergesort")
+    .drop_duplicates(subset=["race_index"], keep="first")
+    .sort_values("race_index")
+    .reset_index(drop=True)
+)
+# 保存
+result_df.to_csv("new_df_with_race_key_final.csv", index=False)
+
+
+roi_df = pd.DataFrame(columns=["top_n", "odds", "match_index", "total_bets", "total_payout"])
+def calc_roi(top_n):
+    # result_dfを行でループ
+    total_bets = 0.0
+    total_payout = 0.0
+    for result in result_df.itertuples(index=False):
+        total_bets += 1.0 * top_n  # 各レースで1ユニット賭けると仮定
+        odds = result.odds
+        match_index = result.match_index
+        if match_index <= top_n:  # マッチした順位がtop_n以内なら
+            total_payout += odds  # オッズを加算
+        # print(f"odds: {result.odds}, match_index: {result.match_index}, total_bets: {total_bets}, total_payout: {total_payout}")
+        roi_df.loc[len(roi_df)] = {
+            "top_n": top_n,
+            "odds": odds,
+            "match_index": match_index,
+            "total_bets": total_bets,
+            "total_payout": total_payout
+        }
+
+
+    if total_bets == 0:
+        return 0.0
+    roi = (total_payout - total_bets) / total_bets  # ROI
+    return roi
+
+# 例: 1〜10番目までの場合のROI
+results = {n: calc_roi(n) for n in range(1, 10)}
+
+for n, r in results.items():
+    print(f"Top {n}: ROI = {r:.3f}")
+
+roi_df.to_csv("roi_results.csv", index=False)
+# hit_top3_unordered = top3_unordered_hit_rate(all_scores, all_ranks)
+# mrr_winner        = mean_reciprocal_rank(all_scores, all_ranks)
+# rho_spearman      = spearman_corr(all_scores, all_ranks)
+
+# # ---- baseline metrics (constant 1‑2‑3) ----
+# tri123_hit      = constant_123_trifecta_hit(all_ranks)
+# base_pos1       = baseline123_position_accuracy(all_ranks, 1)
+# base_pos2       = baseline123_position_accuracy(all_ranks, 2)
+# base_pos3       = baseline123_position_accuracy(all_ranks, 3)
+# base_top1       = base_pos1                                   # same as pos1
+# base_top3_unord = baseline123_top3_unordered_hit(all_ranks)
+
+# # --- per-position accuracy (model) ---
+# def position_accuracy(ranks: torch.Tensor, scores: torch.Tensor, pos: int) -> float:
+#     """
+#     Accuracy for predicting which boat finishes pos‑th.
+#     """
+#     # Model's prediction: which boat is pos-th in predicted ranking
+#     pred_rank = scores.argsort(dim=1, descending=True).argsort(dim=1) + 1
+#     pred_idx = (pred_rank == pos).float().argmax(dim=1)
+#     true_idx = (ranks == pos).float().argmax(dim=1)
+#     return (pred_idx == true_idx).float().mean().item()
+
+# acc_pos1 = position_accuracy(all_ranks, all_scores, 1)
+# acc_pos2 = position_accuracy(all_ranks, all_scores, 2)
+# acc_pos3 = position_accuracy(all_ranks, all_scores, 3)
+
+# print(f"[predict] N={len(all_scores)}")
+# print(f"  • Top‑1 Acc              : {acc_top1:.3f}   (baseline {base_top1:.3f})")
+# print(f"  • Pos1/2/3 Acc           : {acc_pos1:.3f}/{acc_pos2:.3f}/{acc_pos3:.3f} "
+#       f"(baseline {base_pos1:.3f}/{base_pos2:.3f}/{base_pos3:.3f})")
+# print(f"  • Top‑3 unordered Hit    : {hit_top3_unordered:.3f}   (baseline {base_top3_unord:.3f})")
+# print(f"  • Trifecta Hit           : {acc_tri3:.3f}   (baseline {tri123_hit:.3f})")
+# print(f"  • Winner MRR             : {mrr_winner:.3f}")
+# print(f"  • Spearman ρ             : {rho_spearman:.3f}")
+# print(f"  • Score variance (mean/median): {mean_var:.4f} / {median_var:.4f}")
+# print(f"  • Avg rank of true trifecta (unordered) : {mean_tri:.2f}")
+# print(f"  • Avg rank of true trifecta (strict)    : {mean_tri_order:.2f}")
+
+# # ---- CSV に追記保存 ----
+# import csv, os
+# os.makedirs("artifacts", exist_ok=True)
+# metrics_path = "artifacts/predict_metrics_recent.csv"
+# write_header = not os.path.exists(metrics_path)
+# with open(metrics_path, "a", newline="") as f:
+#     w = csv.writer(f)
+#     if write_header:
+#         w.writerow(["date", "n_races",
+#                     "top1_acc", "pos1_acc", "pos2_acc", "pos3_acc",
+#                     "top3unordered_hit", "trifecta_hit",
+#                     "baseline123_hit", "baseline123_top1",
+#                     "baseline123_pos1", "baseline123_pos2", "baseline123_pos3",
+#                     "baseline123_top3unordered",
+#                     "winner_mrr", "spearman_rho",
+#                     "var_mean", "var_median", "tri_rank_mean",
+#                     "tri_rank_order_mean"])
+#     w.writerow([str(today), len(all_scores),
+#                 acc_top1, acc_pos1, acc_pos2, acc_pos3,
+#                 hit_top3_unordered, acc_tri3,
+#                 tri123_hit, base_top1,
+#                 base_pos1, base_pos2, base_pos3,
+#                 base_top3_unord,
+#                 mrr_winner, rho_spearman,
+#                 mean_var, median_var, mean_tri, mean_tri_order])
+# print(f"[saved] {metrics_path}")
 
 
 # In[ ]:
@@ -1118,11 +1295,11 @@ import datetime as dt
 
 today = dt.date.today()
 # 2025年1月1日以降のデータを取得する場合は、以下の行を変更してください。
-start_date = dt.date(2025, 8, 9)
+# start_date = today - dt.timedelta(days=20)
 
 query = f"""
     SELECT * FROM pred.features_with_record
-    WHERE race_date BETWEEN '{start_date}' AND '{today}'
+    WHERE race_date BETWEEN '{today}' AND '{today}'
 """
 
 conn = psycopg2.connect(**DB_CONF)
@@ -1160,20 +1337,11 @@ display(pred_probs_df.head())
 # (3) 馬単/三連単の TOP‑K（PL 方式）を保存
 exa_df, tri_df = predictor.predict_exotics_topk(scores_df=pred_scores_df,
                                                 K=10,
-                                                tau=5.0,
                                                 include_meta=True,
                                                 save_exacta="artifacts/pred_exacta_topk.csv",
                                                 save_trifecta="artifacts/pred_trifecta_topk.csv")
 display(exa_df.head())
 display(tri_df.head())
-
-
-# In[ ]:
-
-
-# connのクローズ
-conn.close()
-print("[predict] Prediction completed and saved to artifacts directory.")
 
 
 # In[ ]:

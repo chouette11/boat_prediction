@@ -260,25 +260,27 @@ LEFT JOIN feat.tf2_lane_stats ls USING (race_key)
 WITH NO DATA;
 
 /* ---------- 評価用特徴量（feat.eval_features） ---------- */
+DROP MATERIALIZED VIEW IF EXISTS feat.eval_features2 CASCADE;
 CREATE MATERIALIZED VIEW IF NOT EXISTS feat.eval_features2 AS
 SELECT
     tf.*,
     o.first_lane,
     o.second_lane,
     o.third_lane,
-    o.odds
+    o.odds AS trifecta_odds
 FROM feat.train_features2 tf
 JOIN core.odds3t o USING (race_key)
 WITH NO DATA;
 
 /* ---------- 評価用特徴量（feat.eval_features） ---------- */
+DROP MATERIALIZED VIEW IF EXISTS feat.eval_features3 CASCADE;
 CREATE MATERIALIZED VIEW IF NOT EXISTS feat.eval_features3 AS
 SELECT
     tf.*,
     o.first_lane,
     o.second_lane,
     o.third_lane,
-    o.odds
+    o.odds AS trifecta_odds
 FROM feat.train_features3 tf
 JOIN core.odds3t o USING (race_key)
 WITH NO DATA;

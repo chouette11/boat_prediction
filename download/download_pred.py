@@ -15,7 +15,7 @@ def download_off_pred(start_ymd: str, days: int = 1, interval_sec: int = 1, kind
         target_ymd = current_date.strftime("%Y%m%d")
         print(target_ymd)
         target_url = f"{base_url}&hd={target_ymd}"
-        for j in range(1, 7):
+        for j in range(1, 2):
             target_url_no = f"{target_url}&rno={j}"
             print(f"▶ 取得中: {target_url_no} ...")
             try:
@@ -23,6 +23,8 @@ def download_off_pred(start_ymd: str, days: int = 1, interval_sec: int = 1, kind
                 if response.status_code == 200 and "<html" in response.text.lower():
                     file_name = f"wakamatsu_{kind}_20_{target_ymd}_{j}.html"
                     dir_name = f"download/wakamatsu_off_{kind}_pred_html"
+                    if not os.path.exists(dir_name):
+                        os.makedirs(dir_name)
                     file_path = os.path.join(dir_name, file_name)
                     with open(file_path, "w", encoding="utf-8") as f:
                         f.write(response.text)

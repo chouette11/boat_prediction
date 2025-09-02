@@ -15,7 +15,7 @@
 
 
 
-# In[83]:
+# In[ ]:
 
 
 get_ipython().run_line_magic('load_ext', 'autoreload')
@@ -107,7 +107,7 @@ register_feature(FeatureDef("wind_sin", _wind_sin, deps=["wind_dir_deg"]))
 register_feature(FeatureDef("wind_cos", _wind_cos, deps=["wind_dir_deg"]))
 
 
-# In[84]:
+# In[ ]:
 
 
 import nbformat
@@ -123,7 +123,7 @@ with open("main_base.py", "w", encoding="utf-8") as f:
     f.write(source)
 
 
-# In[85]:
+# In[ ]:
 
 
 load_dotenv(override=True)
@@ -150,7 +150,7 @@ result_df = pd.read_sql("""
 print(f"Loaded {len(result_df)} rows from the database.")
 
 
-# In[86]:
+# In[ ]:
 
 
 result_df = apply_features(result_df)
@@ -199,7 +199,7 @@ scaler_filename = "artifacts/wind_scaler.pkl"
 joblib.dump(scaler, scaler_filename)
 
 
-# In[87]:
+# In[ ]:
 
 
 def encode(col):
@@ -211,7 +211,7 @@ venue2id = encode("venue")
 # race_type2id = encode("race_type")
 
 
-# In[88]:
+# In[ ]:
 
 
 # ============================================================
@@ -252,7 +252,7 @@ TOPK_K = 3
 TOPK_WEIGHTS = [3.0, 2.0, 1.0]
 
 
-# In[89]:
+# In[ ]:
 
 
 def pl_nll(scores: torch.Tensor, ranks: torch.Tensor, reduce: bool = True) -> torch.Tensor:
@@ -329,7 +329,7 @@ print("pl_nll should be ~0 :", pl_nll(scores, ranks).item())
 print("pl_nll_topk (k=3) should be ~0 :", pl_nll_topk(scores, ranks, k=TOPK_K, weights=TOPK_WEIGHTS).item())
 
 
-# In[90]:
+# In[ ]:
 
 
 result_df["race_date"] = pd.to_datetime(result_df["race_date"]).dt.date
@@ -353,7 +353,7 @@ model = DualHeadRanker(boat_in=boat_dim).to(device)
 opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=5e-5)
 
 
-# In[91]:
+# In[ ]:
 
 
 def evaluate_model(model, dataset, device):
@@ -377,8 +377,8 @@ def evaluate_model(model, dataset, device):
 #     df_frac["race_date"] = pd.to_datetime(df_frac["race_date"]).dt.date
 #     latest_date = df_frac["race_date"].max()
 #     cutoff = latest_date - dt.timedelta(days=90)  # last 3 months used as validation set
-#     ds_train = BoatRaceDataset(df_frac[df_frac["race_date"] < cutoff])
-#     ds_val = BoatRaceDataset(df_frac[df_frac["race_date"] >= cutoff])
+#     ds_train = BoatRaceDatasetBase(df_frac[df_frac["race_date"] < cutoff])
+#     ds_val = BoatRaceDatasetBase(df_frac[df_frac["race_date"] >= cutoff])
 
 #     loader_train = DataLoader(ds_train, batch_size=256, shuffle=True)
 #     loader_val = DataLoader(ds_val, batch_size=512)
@@ -429,7 +429,7 @@ def evaluate_model(model, dataset, device):
 #     データセットを 10 行だけに縮小し、500 step で過学習できるか検証
 #     """
 #     tiny_df = df.sample(10, random_state=1).reset_index(drop=True)
-#     tiny_ds = BoatRaceDataset(tiny_df)
+#     tiny_ds = BoatRaceDatasetBase(tiny_df)
 #     tiny_loader = DataLoader(tiny_ds, batch_size=10, shuffle=True)
 
 #     net = DualHeadRanker().to(device)
@@ -455,13 +455,13 @@ def evaluate_model(model, dataset, device):
 
 # if RUN_DIAG:
 #     print("[diag] Running learning‑curve vs. data fraction …")
-#     plot_learning_curve(df, device)
+#     plot_learning_curve(result_df, device)
 #     print("[diag] Running 10‑row overfit_tiny() …")
-#     overfit_tiny(df, device)
+#     overfit_tiny(result_df, device)
 #     print("[diag]   ► finished quick diagnostics\n")
 
 
-# In[92]:
+# In[ ]:
 
 
 # ---------------------------------------------------------------------
@@ -694,45 +694,13 @@ torch.save(model.state_dict(), model_path)
 print(f"Model saved to {model_path}")
 
 
-# In[93]:
+# In[ ]:
 
 
 # ---- Monkey‑patch ROIAnalyzer so it uses BoatRaceDataset2 (MTL) ----------
 from types import MethodType
 from BoatRaceDataset_base import BoatRaceDatasetBase 
 from torch.utils.data import DataLoader
-
-
-class _EvalDatasetMTL(torch.utils.data.Dataset):
-    """
-    Wrap BoatRaceDataset2 but return only 4 items (ctx, boats, lane_ids, ranks)
-    so that roi_util.py can stay unchanged.
-    """
-    def __init__(self, df):
-        self.ds = BoatRaceDatasetBase(df)
-    def __len__(self):
-        return len(self.ds)
-    def __getitem__(self, idx):
-        ctx, boats, lane_ids, ranks, _, _ = self.ds[idx]
-        return ctx, boats, lane_ids, ranks
-
-def _create_loader_mtl(self, df_eval: pd.DataFrame):
-    """Replacement for ROIAnalyzer._create_loader (MTL‑aware)."""
-    df = self.preprocess_df(df_eval, self.scaler, self.num_cols)
-    ds_eval = _EvalDatasetMTL(df)
-    loader = DataLoader(ds_eval, batch_size=self.batch_size, shuffle=False)
-
-    need_cols = ["first_lane", "second_lane", "third_lane"]
-    if all(c in df.columns for c in need_cols):
-        lanes_np = df[need_cols].to_numpy(dtype=np.int64) - 1
-    else:
-        # 予測テーブルでは真の1〜3着が無いのが普通。ダミー(0,1,2)で形だけ満たす
-        lanes_np = np.tile(np.array([0, 1, 2], dtype=np.int64), (len(df), 1))
-    return loader, df, lanes_np
-
-import roi_util as _roi_util_mod
-_roi_util_mod.ROIAnalyzer._create_loader = _create_loader_mtl
-
 from roi_util import ROIAnalyzer
 
 
@@ -770,7 +738,10 @@ if df_recent.empty:
 print(f"[simulate] Loaded {len(df_recent)} rows ({start_date} – {today}).")
 print(f"columns: {', '.join(df_recent.columns)}")
 
-# ---- wrap MTL model so ROIAnalyzer sees only rank scores ----
+
+# In[ ]:
+
+
 class _RankOnly(nn.Module):
     """Adapter: forward() returns rank_pred tensor only, temperature-scaled."""
     def __init__(self, base):
@@ -779,62 +750,26 @@ class _RankOnly(nn.Module):
     def forward(self, *args, **kwargs):
         _, rank_pred, _ = self.base(*args, **kwargs)
         return rank_pred / TEMPERATURE
-
-# ----- metrics & equity (best‑practice defaults) -----
 rank_model = _RankOnly(model).to(device)
 
 analyzer = ROIAnalyzer(model=rank_model, scaler=scaler,
                        num_cols=NUM_COLS, device=device)
 
-df_trifecta_met = analyzer.compute_metrics_dataframe(
-    df_eval=df_recent,
-    tau=5.0,                 # ← Fractional‑Kelly倍率を上げてユニットを実用域へ
-    calibrate="platt",        # ← Platt scaling で確率をキャリブレーション
-    bet_type="trifecta",  # ← 三連単を対象にする
-)
-
-df_trifecta_met.to_csv("artifacts/metrics_trifecta.csv", index=False)
-
-# hitが True の行だけを抽出
-df_trifecta_met_hit = df_trifecta_met[df_trifecta_met["hit"] == True]
-df_trifecta_met_hit.to_csv("artifacts/metrics_trifecta_hit.csv", index=False)
-
-# df_trifecta_eq = ROIAnalyzer.compute_equity_curve(
-#     df_trifecta_met,
-#     bet_unit=1,
-#     bet_mode="kelly",
-#     min_conf=1.0,  # ← Platt scaling でキャリブレーション後の信頼度
-#     min_edge=0.0,
-#     min_kelly=0.00,
-#     max_units=15,
-#     use_conf_factor=True
-# )
-# df_trifecta_eq.to_csv("artifacts/equity_curve_trifecta.csv", index=False)
-
-
-# ROIAnalyzer.plot_equity_curve(
-#     df_trifecta_eq,
-#     title="Equity Curve (Platt‑calib, τ=5, conf≥0.2 & edge≥0.3)",
-#     use_jpy=True
-# )
-
-
-# In[94]:
-
-
 # --- 予測でも「自信度」と「正解三連単の順位」を評価し、CSV に記録 ---
 print("[predict] Evaluating confidence & trifecta rank on recent predictions…")
 
 # ROIAnalyzer の前処理（スケーリング等）をそのまま使ってローダを作成
-loader_eval, _df_eval_proc, _lanes = analyzer._create_loader(df_recent)
+loader_eval, _df_eval_proc, _df_odds = analyzer._create_loader(df_recent)
 
 # 既に上で用意した rank_model は「rank_pred だけ」を返すアダプタ
 model.eval(); rank_model.eval()
-all_scores, all_ranks, all_keys = [], [], []
+all_scores, all_ranks, all_keys, all_odds = [], [], [], []
+
+print(_df_odds)
 
 row_ptr = 0
 with torch.no_grad():
-    for ctx, boats, lane_ids, ranks in loader_eval:
+    for ctx, boats, lane_ids, ranks, _, __ in loader_eval:
         ctx, boats, lane_ids = ctx.to(device), boats.to(device), lane_ids.to(device)
         scores = rank_model(ctx, boats, lane_ids)
         B = scores.size(0)
@@ -844,6 +779,7 @@ with torch.no_grad():
         all_ranks.append(ranks)
 
         # --- meta values (race_key / odds) ---
+        all_odds.append(_df_odds["trifecta_odds"].iloc[row_ptr : row_ptr + B].tolist())
         all_keys.extend(_df_eval_proc["race_key"].iloc[row_ptr : row_ptr + B].tolist())
         row_ptr += B
 
@@ -852,7 +788,7 @@ all_scores = torch.cat(all_scores, dim=0)   # (N,6)
 all_ranks  = torch.cat(all_ranks,  dim=0)   # (N,6)
 
 
-# In[95]:
+# In[ ]:
 
 
 # --------------------------------------------------------------------------
@@ -967,77 +903,8 @@ imp_path = "artifacts/perm_importance_all_base.csv"
 pd.Series(all_imp).sort_values(ascending=False).to_csv(imp_path)
 print(f"[saved] {imp_path}")
 
-# ---------- Group permutation importance for pattern families ----------
-from copy import deepcopy
 
-def permute_group(model, df_full: pd.DataFrame, cols: list[str], device="cpu") -> float:
-    """Return Δval_nll when permuting the given group of columns jointly."""
-    base_ds = BoatRaceDatasetBase(df_full)
-    base_loss = evaluate_model(model, base_ds, device)
-    shuffled = df_full.copy()
-    if not cols:
-        return 0.0
-    idx = np.random.permutation(len(shuffled))
-    for c in cols:
-        if c in shuffled.columns:
-            shuffled[c] = shuffled[c].values[idx]
-    tmp_ds = BoatRaceDatasetBase(shuffled)
-    loss = evaluate_model(model, tmp_ds, device)
-    return float(loss - base_loss)
-
-# collect groups (prefer gated)
-pat_cols = []
-lose_cols = []
-for l in range(1, 7):
-    for p in ["nige","sashi","makuri","makurizashi","nuki","megumare","other"]:
-        g = f"lane{l}_pat_{p}_rate_gated"
-        r_ = f"lane{l}_pat_{p}_rate"
-        if g in result_df.columns:
-            pat_cols.append(g)
-        elif r_ in result_df.columns:
-            pat_cols.append(r_)
-for p in ["sashi","makuri","makurizashi","nuki","penalty"]:
-    g = f"lane1_lose_{p}_rate_gated"
-    r_ = f"lane1_lose_{p}_rate"
-    if g in result_df.columns:
-        lose_cols.append(g)
-    elif r_ in result_df.columns:
-        lose_cols.append(r_)
-
-print("[group‑perm] Evaluating pattern groups…")
-# axes family (precomputed columns)
-axis_cols = []
-for l in range(1, 7):
-    for nm in ["attack_axis","chaos_axis","entropy","margin"]:
-        c = f"lane{l}_pat_{nm}"
-        if c in result_df.columns:
-            axis_cols.append(c)
-# compat family
-compat_cols = [f"compat_lane{l}" for l in range(2,7) if f"compat_lane{l}" in result_df.columns]
-
-res = {
-    "pat_group_delta": permute_group(model, result_df, pat_cols, device),
-    "lose_group_delta": permute_group(model, result_df, lose_cols, device),
-    "axis_group_delta": permute_group(model, result_df, axis_cols, device) if axis_cols else 0.0,
-    "compat_group_delta": permute_group(model, result_df, compat_cols, device) if compat_cols else 0.0,
-}
-print("[group‑perm] Δval_nll:", res)
-pd.Series(res).to_csv("artifacts/group_perm_pattern.csv")
-
-# # ② グループ Ablation
-# print("▼ Group ablation (drop 6 cols each)")
-# ab_results = run_ablation_groups(result_df, group_size=6,
-#                                     epochs=5, device=device)
-# abl_path = "artifacts/ablation_results.csv"
-# with open(abl_path, "w", newline="") as f:
-#     import csv
-#     w = csv.writer(f); w.writerow(["dropped_cols", "val_nll"])
-#     for cols, v in ab_results:
-#         w.writerow(["|".join(cols), f"{v:.6f}"])
-# print(f"[saved] {abl_path}")
-
-
-# In[96]:
+# In[ ]:
 
 
 # all_ranksとall_scoresを結合したdfに変換
@@ -1050,7 +917,7 @@ df_score_ranks["race_key"] = all_keys
 df_score_ranks = df_score_ranks.drop_duplicates()
 
 # merge odds from df_trifecta_met_hit by race_key
-df_score_ranks = df_score_ranks.merge(df_trifecta_met_hit[["race_key","trifecta_odds"]], on="race_key", how="left")
+df_score_ranks = df_score_ranks.merge(_df_odds[["race_key","trifecta_odds"]], on="race_key", how="left")
 
 # --- lane 列をまとめて list 化 ---
 score_cols = [f"lane{i}_score" for i in range(1, 7)]
@@ -1150,7 +1017,7 @@ for n in range(1, 6):
 
 
 
-# In[97]:
+# In[ ]:
 
 
 def top1_accuracy(scores: torch.Tensor, ranks: torch.Tensor) -> float:
@@ -1391,7 +1258,7 @@ with open(metrics_path, "a", newline="") as f:
 print(f"[saved] {metrics_path}")
 
 
-# In[98]:
+# In[ ]:
 
 
 # === 条件別ヒット率/ROI 分析（修正版） =========================
@@ -1661,7 +1528,7 @@ else:
     print("[cond] ROI 集計が空のため、best ROI CSV の出力はスキップしました。")
 
 
-# In[107]:
+# In[ ]:
 
 
 # prediction
@@ -1778,7 +1645,7 @@ tri_df = tri_df.merge(
 tri_df.to_csv("artifacts/pred_trifecta_topk.csv", index=False)
 
 
-# In[100]:
+# In[ ]:
 
 
 # connのクローズ
@@ -1786,7 +1653,7 @@ conn.close()
 print("[predict] Prediction completed and saved to artifacts directory.")
 
 
-# In[101]:
+# In[ ]:
 
 
 torch.save({

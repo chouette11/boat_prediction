@@ -5,9 +5,9 @@ from download.wakamatsu_off_beforeinfo_html_to_csv import parse_boat_race_html a
 import sql2.etl_pred
 
 today = datetime.datetime.now()
-yesterday = today - datetime.timedelta(days=1)
+yesterday = today - datetime.timedelta(days=4)
 print(f"Downloading yesterday: {yesterday.strftime('%Y%m%d')}")
-download_off_pred(today.strftime("%Y%m%d"))
+download_off_pred(yesterday.strftime("%Y%m%d"))
 
 for beforeinfo_filename in os.listdir('download/wakamatsu_off_beforeinfo_pred_html'):
     beforeinfo_path = os.path.join('download/wakamatsu_off_beforeinfo_pred_html', beforeinfo_filename)

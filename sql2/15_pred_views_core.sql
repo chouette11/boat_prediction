@@ -14,7 +14,7 @@ CREATE OR REPLACE VIEW core.pred_boat_info AS
 WITH b AS (
   SELECT *,
          core.f_race_key(race_date, race_no, stadium) AS race_key
-  FROM raw.beforeinfo
+  FROM raw.beforeinfo_off
 )
 SELECT DISTINCT ON (b.race_key, b.lane)
        b.race_key,
@@ -67,7 +67,7 @@ SELECT DISTINCT ON (race_key)
        NULLIF(regexp_replace(wave_height_raw,'[^0-9.]','','g'), '')::NUMERIC AS wave_height,
        NULLIF(regexp_replace(water_temp_raw ,'[^0-9.]','','g'), '')::NUMERIC AS water_temp,
        weather_txt
-FROM raw.weather
+FROM raw.weather_off
 ORDER BY race_key, obs_time_label DESC;
 
 -- レースキー→日付/会場マップ（予測用）
@@ -76,7 +76,7 @@ SELECT DISTINCT ON (core.f_race_key(race_date, race_no, stadium))
        core.f_race_key(race_date, race_no, stadium) AS race_key,
        race_date,
        stadium AS venue
-FROM raw.beforeinfo
+FROM raw.beforeinfo_off
 ORDER BY core.f_race_key(race_date, race_no, stadium), race_date DESC;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_core_pred_races_race_key

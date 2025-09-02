@@ -25,6 +25,8 @@ SELECT
     SUM(CASE WHEN r.rank <= 3 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*),0) AS three_rate
 FROM core.boat_info b
 JOIN core.results r ON b.race_key = r.race_key AND b.lane = r.lane
+JOIN core.races cr ON b.race_key = cr.race_key
+WHERE cr.stadium = '若 松'
 GROUP BY b.racer_id, b.course
 WITH NO DATA;
 
@@ -220,8 +222,8 @@ REFRESH MATERIALIZED VIEW pred.boat_flat;
 \echo '--- features 層のマテリアライズドビューを更新中 ---'
 REFRESH MATERIALIZED VIEW pred.features;
 \echo '--- filtered_course 層のマテリアライズドビューを更新中 ---'
-REFRESH MATERIALIZED VIEW feat.filtered_course;
-ANALYZE feat.filtered_course;
+-- REFRESH MATERIALIZED VIEW feat.filtered_course;
+-- ANALYZE feat.filtered_course;
 \echo '--- tf2_lane_stats 層のマテリアライズドビューを更新中 ---'
 REFRESH MATERIALIZED VIEW pred.tf2_lane_stats;
 \echo '--- features_with_record 層のマテリアライズドビューを更新中 ---'

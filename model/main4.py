@@ -1,13 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[ ]:
-
-
-
-
-
-# In[70]:
+# In[1]:
 
 
 get_ipython().run_line_magic('load_ext', 'autoreload')
@@ -94,11 +88,104 @@ def _wind_cos(df: pd.DataFrame) -> pd.Series:
     """Cosine of wind direction (deg → rad)."""
     return np.cos(np.deg2rad(df["wind_dir_deg"]))
 
+
 register_feature(FeatureDef("wind_sin", _wind_sin, deps=["wind_dir_deg"]))
 register_feature(FeatureDef("wind_cos", _wind_cos, deps=["wind_dir_deg"]))
 
+# ----- Gate‑augmented features (pattern rates × evidence gate) -----
+def add_gate_features(df: pd.DataFrame, K: float = 20.0, K_lose: float = 20.0) -> pd.DataFrame:
+    """
+    Create gated versions of pattern‑rate features using evidence gates.
+    - lane{l}_pat_*_rate_gated  = lane{l}_pat_*_rate  × (starts/(starts+K))
+    - lane1_lose_*_rate_gated   = lane1_lose_*_rate   × (defeats/(defeats+K_lose))
+    Also emits gate columns: lane{l}_pat_gate, lane1_lose_gate.
 
-# In[71]:
+    Robustness improvements:
+    - Fallback starts source: try lane{l}_pat_starts → lane{l}_starts
+    - Fallback defeats source: use lane1_defeats, else (lane1_starts - lane1_firsts)
+    - Force numeric with to_numeric; safe on objects/strings
+    - Diagnostics to detect all‑zero issues
+    """
+    patterns_pat = ["nige","sashi","makuri","makurizashi","nuki","megumare","other"]
+    lose_patterns = ["sashi","makuri","makurizashi","nuki","penalty"]
+
+    def first_existing(*names):
+        for n in names:
+            if n in df.columns:
+                return df[n]
+        return None
+
+    added = 0
+    zero_gates = 0
+
+    # per‑lane win‑pattern gates
+    for l in range(1, 7):
+        starts_series = first_existing(f"lane{l}_pat_starts", f"lane{l}_starts")
+        if starts_series is None:
+            continue
+        starts = pd.to_numeric(starts_series, errors="coerce").fillna(0.0).astype("float32")
+        gate = (starts.astype("float64") / (starts.astype("float64") + float(K))).clip(0.0, 1.0).astype("float32")
+        df[f"lane{l}_pat_gate"] = gate
+        zero_gates += int((gate == 0).sum())
+        for p in patterns_pat:
+            base = f"lane{l}_pat_{p}_rate"
+            if base in df.columns:
+                basev = pd.to_numeric(df[base], errors="coerce").fillna(0.0).astype("float32")
+                df[f"{base}_gated"] = (basev * gate).astype("float32")
+                added += 1
+
+    # lane1 defeat‑pattern gate (with fallback if lane1_defeats is missing)
+    defeats_series = first_existing("lane1_defeats", "lane1_starts")
+    if defeats_series is not None:
+        defeats = pd.to_numeric(defeats_series, errors="coerce").fillna(0.0).astype("float32")
+        if defeats_series.name == "lane1_starts" and "lane1_firsts" in df.columns:
+            # estimate defeats if explicit column is missing
+            firsts = pd.to_numeric(df["lane1_firsts"], errors="coerce").fillna(0.0).astype("float32")
+            defeats = (defeats - firsts).clip(lower=0).astype("float32")
+        gate1 = (defeats.astype("float64") / (defeats.astype("float64") + float(K_lose))).clip(0.0, 1.0).astype("float32")
+        df["lane1_lose_gate"] = gate1
+        zero_gates += int((gate1 == 0).sum())
+        for p in lose_patterns:
+            base = f"lane1_lose_{p}_rate"
+            if base in df.columns:
+                basev = pd.to_numeric(df[base], errors="coerce").fillna(0.0).astype("float32")
+                df[f"{base}_gated"] = (basev * gate1).astype("float32")
+                added += 1
+
+    # diagnostics
+    try:
+        gcols = [c for c in df.columns if c.endswith("_gate") or c.endswith("_gated")]
+        total_sum = 0.0
+        if gcols:
+            total_sum = float(pd.to_numeric(df[gcols].select_dtypes(include=["number"]).sum(), errors="coerce").fillna(0.0).sum())
+        print(f"[gate] added={added} cols; gate_zero_cells={zero_gates}; gated_total_sum={total_sum:.6f}; cols={len(gcols)}")
+    except Exception as e:
+        print(f"[gate] diag error: {e}")
+
+    return df
+
+
+# ----- Prune to columns actually used by BoatRaceDataset ---------------
+def prune_to_dataset_used(df: pd.DataFrame) -> pd.DataFrame:
+    """Instantiate BoatRaceDataset on a copy to discover the exact feature set
+    it consumes, then restrict df to that set so that training/PI only see
+    model-used columns.
+    """
+    try:
+        tmp_ds = BoatRaceDataset(df.copy())
+        used_cols = getattr(tmp_ds, "used_columns", None)
+        if used_cols is None:
+            print("[feature-prune] BoatRaceDataset has no used_columns; skip")
+            return df
+        keep = [c for c in used_cols if c in df.columns]
+        print(f"[feature-prune] keep {len(keep)}/{df.shape[1]} cols as defined by Dataset")
+        return df[keep].copy()
+    except Exception as e:
+        print(f"[feature-prune] failed to derive used columns: {e}")
+        return df
+
+
+# In[2]:
 
 
 import nbformat
@@ -114,7 +201,7 @@ with open("main4.py", "w", encoding="utf-8") as f:
     f.write(source)
 
 
-# In[72]:
+# In[3]:
 
 
 load_dotenv(override=True)
@@ -141,12 +228,12 @@ result_df = pd.read_sql("""
 print(f"Loaded {len(result_df)} rows from the database.")
 
 
-# In[ ]:
+# In[4]:
 
 
-# --- 追加特徴量（Feature Registry 経由） ---
 result_df = apply_features(result_df)
-
+# 重要列の drop バグ修正：bf_course / bf_st_time / weight は保持する
+# 重要列の drop バグ修正：bf_course / bf_st_time / weight は保持する
 exclude = []
 
 for lane in range(1, 7):
@@ -161,7 +248,13 @@ for lane in range(1, 7):
 # exclude.append("air_temp")
 
 
+
 result_df.drop(columns=exclude, inplace=True, errors="ignore")
+# ---- add gated features for pattern rates & lane1‑lose (training set) ----
+
+result_df = add_gate_features(result_df, K=20.0, K_lose=20.0)
+print("[gate] nonzero check (train):", float(result_df.filter(regex=r"(_gate$|_gated$)").select_dtypes(include=["number"]).sum().sum()))
+result_df = prune_to_dataset_used(result_df)
 
 
 # numeric columns for StandardScaler
@@ -196,7 +289,7 @@ scaler_filename = "artifacts/wind_scaler.pkl"
 joblib.dump(scaler, scaler_filename)
 
 
-# In[74]:
+# In[5]:
 
 
 def encode(col):
@@ -208,7 +301,7 @@ venue2id = encode("venue")
 # race_type2id = encode("race_type")
 
 
-# In[75]:
+# In[6]:
 
 
 # ============================================================
@@ -246,7 +339,7 @@ TEMPERATURE   = 0.80   # logits are divided by T at inference
 LAMBDA_WIN = 1.0        # weight for winner‑BCE loss
 
 
-# In[76]:
+# In[7]:
 
 
 def pl_nll(scores: torch.Tensor, ranks: torch.Tensor, reduce: bool = True) -> torch.Tensor:
@@ -285,7 +378,7 @@ ranks  = torch.tensor([[1, 2, 3, 4, 5, 6]], dtype=torch.int64)    # lane0 が 1 
 print("pl_nll should be ~0 :", pl_nll(scores, ranks).item())
 
 
-# In[77]:
+# In[8]:
 
 
 result_df["race_date"] = pd.to_datetime(result_df["race_date"]).dt.date
@@ -309,7 +402,7 @@ model = DualHeadRanker(boat_in=boat_dim).to(device)
 opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=5e-5)
 
 
-# In[78]:
+# In[9]:
 
 
 def evaluate_model(model, dataset, device):
@@ -417,7 +510,7 @@ def evaluate_model(model, dataset, device):
 #     print("[diag]   ► finished quick diagnostics\n")
 
 
-# In[79]:
+# In[10]:
 
 
 # ---------------------------------------------------------------------
@@ -650,7 +743,7 @@ torch.save(model.state_dict(), model_path)
 print(f"Model saved to {model_path}")
 
 
-# In[80]:
+# In[11]:
 
 
 # ---- Monkey‑patch ROIAnalyzer so it uses BoatRaceDataset2 (MTL) ----------
@@ -715,7 +808,12 @@ query = f"""
 df_recent = pd.read_sql(query, conn)
 print(df_recent)
 
+
 df_recent.drop(columns=exclude, inplace=True, errors="ignore")
+
+df_recent = add_gate_features(df_recent, K=20.0, K_lose=20.0)
+print("[gate] nonzero check (eval):", float(df_recent.filter(regex=r"(_gate$|_gated$)").select_dtypes(include=["number"]).sum().sum()))
+df_recent = prune_to_dataset_used(df_recent)
 
 df_recent.to_csv("artifacts/eval_features_recent_all.csv", index=False)
 
@@ -774,7 +872,7 @@ df_trifecta_met_hit.to_csv("artifacts/metrics_trifecta_hit.csv", index=False)
 # )
 
 
-# In[81]:
+# In[12]:
 
 
 # --- 予測でも「自信度」と「正解三連単の順位」を評価し、CSV に記録 ---
@@ -807,7 +905,7 @@ all_scores = torch.cat(all_scores, dim=0)   # (N,6)
 all_ranks  = torch.cat(all_ranks,  dim=0)   # (N,6)
 
 
-# In[82]:
+# In[13]:
 
 
 # --------------------------------------------------------------------------
@@ -921,6 +1019,63 @@ imp_path = "artifacts/perm_importance_all_all.csv"
 pd.Series(all_imp).sort_values(ascending=False).to_csv(imp_path)
 print(f"[saved] {imp_path}")
 
+# ---------- Group permutation importance for pattern families ----------
+from copy import deepcopy
+
+def permute_group(model, df_full: pd.DataFrame, cols: list[str], device="cpu") -> float:
+    """Return Δval_nll when permuting the given group of columns jointly."""
+    base_ds = BoatRaceDataset(df_full)
+    base_loss = evaluate_model(model, base_ds, device)
+    shuffled = df_full.copy()
+    if not cols:
+        return 0.0
+    idx = np.random.permutation(len(shuffled))
+    for c in cols:
+        if c in shuffled.columns:
+            shuffled[c] = shuffled[c].values[idx]
+    tmp_ds = BoatRaceDataset(shuffled)
+    loss = evaluate_model(model, tmp_ds, device)
+    return float(loss - base_loss)
+
+# collect groups (prefer gated)
+pat_cols = []
+lose_cols = []
+for l in range(1, 7):
+    for p in ["nige","sashi","makuri","makurizashi","nuki","megumare","other"]:
+        g = f"lane{l}_pat_{p}_rate_gated"
+        r_ = f"lane{l}_pat_{p}_rate"
+        if g in result_df.columns:
+            pat_cols.append(g)
+        elif r_ in result_df.columns:
+            pat_cols.append(r_)
+for p in ["sashi","makuri","makurizashi","nuki","penalty"]:
+    g = f"lane1_lose_{p}_rate_gated"
+    r_ = f"lane1_lose_{p}_rate"
+    if g in result_df.columns:
+        lose_cols.append(g)
+    elif r_ in result_df.columns:
+        lose_cols.append(r_)
+
+print("[group‑perm] Evaluating pattern groups…")
+# axes family (precomputed columns)
+axis_cols = []
+for l in range(1, 7):
+    for nm in ["attack_axis","chaos_axis","entropy","margin"]:
+        c = f"lane{l}_pat_{nm}"
+        if c in result_df.columns:
+            axis_cols.append(c)
+# compat family
+compat_cols = [f"compat_lane{l}" for l in range(2,7) if f"compat_lane{l}" in result_df.columns]
+
+res = {
+    "pat_group_delta": permute_group(model, result_df, pat_cols, device),
+    "lose_group_delta": permute_group(model, result_df, lose_cols, device),
+    "axis_group_delta": permute_group(model, result_df, axis_cols, device) if axis_cols else 0.0,
+    "compat_group_delta": permute_group(model, result_df, compat_cols, device) if compat_cols else 0.0,
+}
+print("[group‑perm] Δval_nll:", res)
+pd.Series(res).to_csv("artifacts/group_perm_pattern.csv")
+
 # # ② グループ Ablation
 # print("▼ Group ablation (drop 6 cols each)")
 # ab_results = run_ablation_groups(result_df, group_size=6,
@@ -934,7 +1089,7 @@ print(f"[saved] {imp_path}")
 # print(f"[saved] {abl_path}")
 
 
-# In[83]:
+# In[14]:
 
 
 # all_ranksとall_scoresを結合したdfに変換
@@ -1047,7 +1202,7 @@ for n in range(1, 6):
 
 
 
-# In[84]:
+# In[15]:
 
 
 def top1_accuracy(scores: torch.Tensor, ranks: torch.Tensor) -> float:
@@ -1240,7 +1395,7 @@ with open(metrics_path, "a", newline="") as f:
 print(f"[saved] {metrics_path}")
 
 
-# In[85]:
+# In[16]:
 
 
 # === 条件別ヒット率/ROI 分析（修正版） =========================
@@ -1442,7 +1597,7 @@ else:
 # ============================================================
 
 
-# In[86]:
+# In[17]:
 
 
 # prediction
@@ -1464,7 +1619,12 @@ df_recent = pd.read_sql(query, conn)
 print(df_recent)
 df_recent.to_csv("artifacts/pred_features_recent.csv", index=False)
 
+
 df_recent.drop(columns=exclude, inplace=True, errors="ignore")
+
+df_recent = add_gate_features(df_recent, K=20.0, K_lose=20.0)
+print("[gate] nonzero check (pred):", float(df_recent.filter(regex=r"(_gate$|_gated$)").select_dtypes(include=["number"]).sum().sum()))
+df_recent = prune_to_dataset_used(df_recent)
 
 if df_recent.empty:
     print("[predict] No rows fetched for the specified period.")

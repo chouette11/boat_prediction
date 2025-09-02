@@ -15,7 +15,7 @@
 
 
 
-# In[1]:
+# In[83]:
 
 
 get_ipython().run_line_magic('load_ext', 'autoreload')
@@ -107,7 +107,7 @@ register_feature(FeatureDef("wind_sin", _wind_sin, deps=["wind_dir_deg"]))
 register_feature(FeatureDef("wind_cos", _wind_cos, deps=["wind_dir_deg"]))
 
 
-# In[2]:
+# In[84]:
 
 
 import nbformat
@@ -123,7 +123,7 @@ with open("main_base.py", "w", encoding="utf-8") as f:
     f.write(source)
 
 
-# In[3]:
+# In[85]:
 
 
 load_dotenv(override=True)
@@ -150,7 +150,7 @@ result_df = pd.read_sql("""
 print(f"Loaded {len(result_df)} rows from the database.")
 
 
-# In[4]:
+# In[86]:
 
 
 result_df = apply_features(result_df)
@@ -199,7 +199,7 @@ scaler_filename = "artifacts/wind_scaler.pkl"
 joblib.dump(scaler, scaler_filename)
 
 
-# In[5]:
+# In[87]:
 
 
 def encode(col):
@@ -211,7 +211,7 @@ venue2id = encode("venue")
 # race_type2id = encode("race_type")
 
 
-# In[6]:
+# In[88]:
 
 
 # ============================================================
@@ -252,7 +252,7 @@ TOPK_K = 3
 TOPK_WEIGHTS = [3.0, 2.0, 1.0]
 
 
-# In[7]:
+# In[89]:
 
 
 def pl_nll(scores: torch.Tensor, ranks: torch.Tensor, reduce: bool = True) -> torch.Tensor:
@@ -329,7 +329,7 @@ print("pl_nll should be ~0 :", pl_nll(scores, ranks).item())
 print("pl_nll_topk (k=3) should be ~0 :", pl_nll_topk(scores, ranks, k=TOPK_K, weights=TOPK_WEIGHTS).item())
 
 
-# In[8]:
+# In[90]:
 
 
 result_df["race_date"] = pd.to_datetime(result_df["race_date"]).dt.date
@@ -353,7 +353,7 @@ model = DualHeadRanker(boat_in=boat_dim).to(device)
 opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=5e-5)
 
 
-# In[9]:
+# In[91]:
 
 
 def evaluate_model(model, dataset, device):
@@ -461,7 +461,7 @@ def evaluate_model(model, dataset, device):
 #     print("[diag]   ► finished quick diagnostics\n")
 
 
-# In[ ]:
+# In[92]:
 
 
 # ---------------------------------------------------------------------
@@ -694,7 +694,7 @@ torch.save(model.state_dict(), model_path)
 print(f"Model saved to {model_path}")
 
 
-# In[11]:
+# In[93]:
 
 
 # ---- Monkey‑patch ROIAnalyzer so it uses BoatRaceDataset2 (MTL) ----------
@@ -819,7 +819,7 @@ df_trifecta_met_hit.to_csv("artifacts/metrics_trifecta_hit.csv", index=False)
 # )
 
 
-# In[12]:
+# In[94]:
 
 
 # --- 予測でも「自信度」と「正解三連単の順位」を評価し、CSV に記録 ---
@@ -852,7 +852,7 @@ all_scores = torch.cat(all_scores, dim=0)   # (N,6)
 all_ranks  = torch.cat(all_ranks,  dim=0)   # (N,6)
 
 
-# In[13]:
+# In[95]:
 
 
 # --------------------------------------------------------------------------
@@ -1037,7 +1037,7 @@ pd.Series(res).to_csv("artifacts/group_perm_pattern.csv")
 # print(f"[saved] {abl_path}")
 
 
-# In[14]:
+# In[96]:
 
 
 # all_ranksとall_scoresを結合したdfに変換
@@ -1150,7 +1150,7 @@ for n in range(1, 6):
 
 
 
-# In[15]:
+# In[97]:
 
 
 def top1_accuracy(scores: torch.Tensor, ranks: torch.Tensor) -> float:
@@ -1391,7 +1391,7 @@ with open(metrics_path, "a", newline="") as f:
 print(f"[saved] {metrics_path}")
 
 
-# In[16]:
+# In[98]:
 
 
 # === 条件別ヒット率/ROI 分析（修正版） =========================
@@ -1574,26 +1574,94 @@ _base.to_csv("artifacts/cond_base_table.csv", index=False)
 _cond_result.to_csv("artifacts/cond_hit_roi.csv", index=False)
 
 # 5) コンソールにハイライト表示
-if not _cond_result.empty:
-    with pd.option_context("display.max_rows", 20, "display.max_colwidth", 60):
-        print("[cond] 上位の条件例 (top_n=3, ROI順 上位10)")
-        cols_to_show = ["condition", "n", "hit_rate", "roi", "avg_odds_on_hits", "top_n"]
-        # 必要に応じて各条件固有のビン列名を追記
-        extra_cols = []
-        # 条件ごとのビン列（表示があれば自動で含める）
-        for c in ["pl_prob_bin", "gap_bin", "wind_bin", "wave_bin", "tailwind", "venue"]:
-            if c in _cond_result["condition"].unique():
-                extra_cols.append(c)
-        show_top = 3
-        df_view = _cond_result.query(f"top_n == {show_top}").sort_values("roi", ascending=False)
-        # 少なくとも代表的なカラムが出るように調整
-        print(df_view[["condition", "bin", "n_races", "hit_rate", "roi", "avg_odds_on_hits", "top_n"]].head(10))
-else:
-    print("[cond] 条件別集計を作成できませんでした（対象列やデータ不足）。")
+for _n in [1, 2, 3, 4, 5]:
+    if not _cond_result.empty:
+        with pd.option_context("display.max_rows", 20, "display.max_colwidth", 60):
+            print(f"[cond] 上位の条件例 (top_n={_n}, ROI順 上位10)")
+            cols_to_show = ["condition", "n", "hit_rate", "roi", "avg_odds_on_hits", "top_n"]
+            # 必要に応じて各条件固有のビン列名を追記
+            extra_cols = []
+            # 条件ごとのビン列（表示があれば自動で含める）
+            for c in ["pl_prob_bin", "gap_bin", "wind_bin", "wave_bin", "tailwind", "venue"]:
+                if c in _cond_result["condition"].unique():
+                    extra_cols.append(c)
+            df_view = _cond_result.query(f"top_n == {_n}").sort_values("roi", ascending=False)
+            # 少なくとも代表的なカラムが出るように調整
+            print(df_view[["condition", "bin", "n_races", "hit_rate", "roi", "avg_odds_on_hits", "top_n"]].head(10))
+    else:
+        print("[cond] 条件別集計を作成できませんでした（対象列やデータ不足）。")
 # ============================================================
 
+# 4.5) ROI が最大の条件に一致するレースを CSV に出力
+#  - 全体で ROI 最大の条件に一致するレース一覧
+#  - top_n ごとに ROI 最大の条件に一致するレース一覧
+if not _cond_result.empty:
+    # 共通: 条件に一致するレースを抽出してメタ情報を付与
+    def _filter_matches(row):
+        col = row["condition"]
+        binv = row["bin"]
+        topn = int(row["top_n"])
+        sel = _base.dropna(subset=["race_key"]).copy()
+        # bin の型差（Categorical/Interval 等）に備えて比較をフォールバック
+        try:
+            mask = sel[col] == binv
+        except Exception:
+            mask = sel[col].astype(str) == str(binv)
+        sel = sel.loc[mask].drop_duplicates("race_key").copy()
 
-# In[17]:
+        # 出力に含める代表列（存在するものだけ採用）
+        cols_pref = [
+            "race_key", "trifecta_odds", "true_order_rank",
+            "pl_top1_prob", "pl_top2_prob", "pl_gap", "pl_top1",
+            "score_entropy", "score_var",
+            "venue", "air_temp", "water_temp",
+            "wind_speed", "wave_height", "wind_dir_deg", "wind_sin", "wind_cos",
+        ]
+        cols_exist = [c for c in cols_pref if c in sel.columns]
+        if cols_exist:
+            sel = sel[cols_exist]
+
+        # メタ情報
+        sel["condition"] = col
+        sel["bin"] = binv
+        sel["top_n"] = topn
+        sel["roi_bin"] = float(row["roi"])
+        sel["n_races_bin"] = int(row["n_races"])
+        sel["hit_rate_bin"] = float(row["hit_rate"])
+        sel["avg_odds_on_hits_bin"] = (
+            float(row["avg_odds_on_hits"]) if pd.notna(row["avg_odds_on_hits"]) else np.nan
+        )
+        return sel
+
+    os.makedirs("artifacts", exist_ok=True)
+
+    # (A) 全体で ROI 最大の条件
+    _best_overall = _cond_result.sort_values("roi", ascending=False).head(1)
+    _best_overall_matches = _filter_matches(_best_overall.iloc[0])
+    _best_overall_path = "artifacts/cond_best_roi_matches.csv"
+    _best_overall_matches.to_csv(_best_overall_path, index=False)
+    print(f"[cond] Best-ROI matches (overall) saved to {_best_overall_path}  —  "
+          f"condition={_best_overall.iloc[0]['condition']}, bin={_best_overall.iloc[0]['bin']}, "
+          f"ROI={_best_overall.iloc[0]['roi']:.3f}, top_n={int(_best_overall.iloc[0]['top_n'])}")
+
+    # (B) top_n ごとの ROI 最大条件
+    _best_by_topn = (
+        _cond_result.sort_values("roi", ascending=False)
+                    .groupby("top_n", as_index=False)
+                    .head(1)
+    )
+    _dfs = []
+    for _, r in _best_by_topn.iterrows():
+        _dfs.append(_filter_matches(r))
+    if _dfs:
+        _path2 = "artifacts/cond_best_roi_matches_by_topn.csv"
+        pd.concat(_dfs, ignore_index=True).to_csv(_path2, index=False)
+        print(f"[cond] Best-ROI matches (per top_n) saved to {_path2}")
+else:
+    print("[cond] ROI 集計が空のため、best ROI CSV の出力はスキップしました。")
+
+
+# In[107]:
 
 
 # prediction
@@ -1617,10 +1685,6 @@ df_recent.to_csv("artifacts/pred_features_recent.csv", index=False)
 
 
 df_recent.drop(columns=exclude, inplace=True, errors="ignore")
-
-df_recent = add_gate_features(df_recent, K=20.0, K_lose=20.0)
-print("[gate] nonzero check (pred):", float(df_recent.filter(regex=r"(_gate$|_gated$)").select_dtypes(include=["number"]).sum().sum()))
-df_recent = prune_to_dataset_used(df_recent)
 
 if df_recent.empty:
     print("[predict] No rows fetched for the specified period.")
@@ -1654,11 +1718,67 @@ exa_df, tri_df = predictor.predict_exotics_topk(scores_df=pred_scores_df,
                                                 include_meta=True,
                                                 save_exacta="artifacts/pred_exacta_topk.csv",
                                                 save_trifecta="artifacts/pred_trifecta_topk.csv")
-display(exa_df.head())
-display(tri_df.head())
+
+# (4) レース単位の PL top‑1 三連単確率を算出して書き出し／付与
+import numpy as np
+from itertools import permutations
+
+def _pl_top1_from_scores_row(row: pd.Series) -> pd.Series:
+    """
+    lane1_score..lane6_score から
+      - pl_top1_prob: 120通りのPL確率のうち最大（top‑1三連単の確率）
+      - pl_top2_prob: 2番目のPL確率
+      - pl_gap      : 両者の差（自信度の代替）
+      - pl_top1     : top‑1三連単（例 '1-3-5'）
+    を返す。
+    """
+    s = np.array([row[f"lane{i}_score"] for i in range(1, 7)], dtype=float)
+    # 数値安定化（最大値でシフト）
+    s = s - np.max(s)
+    es = np.exp(s)
+    denom0 = float(es.sum())
+
+    best1p, best2p, best1 = -1.0, -1.0, None
+    for a, b, c in permutations(range(6), 3):
+        d1 = denom0
+        d2 = d1 - float(es[a])
+        d3 = d2 - float(es[b])
+        if d2 <= 0 or d3 <= 0:
+            continue
+        p = (float(es[a]) / d1) * (float(es[b]) / d2) * (float(es[c]) / d3)
+        if p > best1p:
+            best2p = best1p
+            best1p = float(p)
+            best1 = (a, b, c)
+        elif p > best2p:
+            best2p = float(p)
+
+    return pd.Series({
+        "pl_top1_prob": best1p,
+        "pl_top2_prob": (best2p if best2p >= 0 else np.nan),
+        "pl_gap": (best1p - best2p) if best2p >= 0 else np.nan,
+        "pl_top1": (f"{best1[0]+1}-{best1[1]+1}-{best1[2]+1}" if best1 is not None else pd.NA),
+    })
+
+# レース単位の要約（race_key, race_date, venue はメタ）
+_pl_summary = pred_scores_df.apply(_pl_top1_from_scores_row, axis=1)
+pred_race_summary = pd.concat(
+    [pred_scores_df[["race_key", "race_date"]], _pl_summary],
+    axis=1
+)
+# 予測用のレース要約CSV（新規）
+pred_race_summary.to_csv("artifacts/pred_race_summary.csv", index=False)
+
+# 既存の三連単TOP-K CSV にも列を付与して上書き保存（rank に関わらず同じ値を持つ）
+tri_df = tri_df.merge(
+    pred_race_summary[["race_key", "pl_top1_prob", "pl_top2_prob", "pl_gap", "pl_top1"]],
+    on="race_key",
+    how="left"
+)
+tri_df.to_csv("artifacts/pred_trifecta_topk.csv", index=False)
 
 
-# In[ ]:
+# In[100]:
 
 
 # connのクローズ
@@ -1666,323 +1786,7 @@ conn.close()
 print("[predict] Prediction completed and saved to artifacts directory.")
 
 
-# In[ ]:
-
-
-# --------------------------------------------------------------------------
-#  グループ Ablation: 重要列を 5～6 個まとめてドロップして val_nll を比較
-# --------------------------------------------------------------------------
-
-
-
-def permute_importance(model, dataset, device="cpu", cols=None):
-    """
-    Permutation importance: 各特徴量列をランダムに permute して val_nll の悪化量を調べる
-    """
-    base_loss = evaluate_model(model, dataset, device)
-
-    # ----- 列リストを決める --------------------------------------------------
-    # cols=None なら「データフレームに存在する “使えそうな” 全列」を対象にする
-    if cols is None:
-        # 予測ターゲットやキー列は除外
-        skip = {"race_key", "race_date"}
-        # rank 列（教師信号）や欠損だらけの列も除外
-        skip |= {c for c in dataset.f.columns if c.endswith("_rank")}
-        cols = [c for c in dataset.f.columns if c not in skip]
-
-    importances: dict[str, float] = {}
-    df_full = dataset.f
-
-    for col in cols:
-        # --- その列だけランダムに permute ---
-        shuffled = df_full.copy()
-        shuffled[col] = np.random.permutation(shuffled[col].values)
-        tmp_ds = BoatRaceDataset(shuffled)
-        loss = evaluate_model(model, tmp_ds, device)
-        importances[col] = loss - base_loss   # 悪化分 (大 → 重要)
-    return importances
-
-def run_ablation_groups(
-    df_full: pd.DataFrame,
-    group_size: int = 6,
-    epochs: int = 5,
-    seed: int = 42,
-    device: str = "cpu",
-):
-    """
-    全特徴量をランダムに group_size 個ずつ束ね、
-    そのグループを丸ごと削除して再学習 → val_nll を返す。
-
-    戻り値: list[tuple[list[str], float]]
-        (ドロップした列リスト, val_nll) を val_nll 昇順で並べたもの
-    """
-    random.seed(seed)
-
-    essential_cols = set(NUM_COLS)          # ctx 用の連続値
-    for l in range(1, 7):
-        essential_cols.update({
-            f"lane{l}_exh_time",
-            f"lane{l}_st",
-            f"lane{l}_weight",
-            f"lane{l}_bf_course",
-            f"lane{l}_fs_flag",
-            f"lane{l}_racer_id",
-            f"lane{l}_racer_name",
-            f"lane{l}_racer_age",
-            f"lane{l}_racer_weight",
-        })
-    # --- 対象列を決める（ターゲット & キー列は除外） ---
-    skip = {"race_key", "race_date"}
-    skip |= {c for c in df_full.columns if c.endswith("_rank")}
-    skip |= essential_cols  
-    skip |= {c for c in df_full.columns if c.endswith("_rank")}
-    cols = [c for c in df_full.columns if c not in skip]
-    random.shuffle(cols)
-
-    groups = [cols[i : i + group_size] for i in range(0, len(cols), group_size)]
-    results = []
-
-    latest_date = pd.to_datetime(df_full["race_date"]).dt.date.max()
-    cutoff = latest_date - dt.timedelta(days=90)
-
-    for g in groups:
-        df_drop = df_full.drop(columns=g)
-
-        ds_tr = BoatRaceDataset(df_drop[df_drop["race_date"] < cutoff])
-        ds_va = BoatRaceDataset(df_drop[df_drop["race_date"] >= cutoff])
-
-        ld_tr = DataLoader(ds_tr, batch_size=256, shuffle=True)
-        ld_va = DataLoader(ds_va, batch_size=512)
-
-        model = DualHeadRanker().to(device)
-        opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=5e-5)
-
-        for _ in range(epochs):
-            model.train()
-            for ctx, boats, lane_ids, ranks, st_true, st_mask in ld_tr:
-                ctx, boats = ctx.to(device), boats.to(device)
-                lane_ids, ranks = lane_ids.to(device), ranks.to(device)
-                st_true, st_mask = st_true.to(device), st_mask.to(device)
-                st_pred, scores = model(ctx, boats, lane_ids)
-                pl_loss = pl_nll_topk(scores, ranks, k=TOPK_K, weights=TOPK_WEIGHTS)
-                mse_st = ((st_pred - st_true) ** 2 * st_mask.float()).sum() / st_mask.float().sum()
-                loss = pl_loss + LAMBDA_ST * mse_st
-                opt.zero_grad(); loss.backward(); opt.step()
-
-        val_loss = evaluate_model(model, ds_va, device)
-        results.append((g, val_loss))
-
-    return sorted(results, key=lambda x: x[1])  # 小さい順に重要
-
-print("▼ Permutation importance (ALL features)")
-all_imp = permute_importance(model, ds_val, device)
-imp_path = "artifacts/perm_importance_all_base.csv"
-pd.Series(all_imp).sort_values(ascending=False).to_csv(imp_path)
-print(f"[saved] {imp_path}")
-
-# ② グループ Ablation
-print("▼ Group ablation (drop 6 cols each)")
-ab_results = run_ablation_groups(result_df, group_size=6,
-                                    epochs=5, device=device)
-abl_path = "artifacts/ablation_results.csv"
-with open(abl_path, "w", newline="") as f:
-    import csv
-    w = csv.writer(f); w.writerow(["dropped_cols", "val_nll"])
-    for cols, v in ab_results:
-        w.writerow(["|".join(cols), f"{v:.6f}"])
-print(f"[saved] {abl_path}")
-
-
-# In[ ]:
-
-
-# ────────────────────────────────────────────────────────────────
-# ① SHAP Interaction を計算するユーティリティ
-# ----------------------------------------------------------------
-import shap, seaborn as sns, matplotlib.pyplot as plt
-import numpy as np, torch, os
-
-# ① 先頭付近に追加
-class _ModelForShap(torch.nn.Module):
-    """lane_ids を float → long に戻してから元モデルへ"""
-    def __init__(self, base):
-        super().__init__()
-        self.base = base
-    def forward(self, ctx, boats, lane_ids_f):
-        return self.base(ctx, boats, lane_ids_f.long())
-
-def shap_interaction_heatmap(model, loader_val,
-                             device="cpu",
-                             n_samples=128,
-                             save_prefix="artifacts/shap"):
-    """
-    ctx(環境6変数) と boat(各艇の3変数: exh_time/st/weight) の
-    相互作用を DeepExplainer で可視化する。
-
-    例：
-      - フォーム(winrate_30d_l*) × 風速(wind_speed)
-      - 重量(weight)           × 追い風(wind_sin<0)
-    """
-    model.eval()
-    os.makedirs(os.path.dirname(save_prefix), exist_ok=True)
-
-    # ---- まずバッチを取り出して n_samples だけ切り出す ----
-    ctx, boats, lane_ids, _, _, _ = next(iter(loader_val))
-    ctx, boats, lane_ids = ctx[:n_samples].to(device), \
-                           boats[:n_samples].to(device), \
-                           lane_ids[:n_samples].to(device)
-
-    # ---- SHAP DeepExplainer (多入力モデル) -------------------
-    model_wrap = _ModelForShap(model).to(device)
-    lane_ids_f = lane_ids.float()
-    explainer = shap.DeepExplainer(model_wrap, [ctx, boats, lane_ids_f])
-    # DeepExplainer はバージョンにより shap_interaction_values を
-    # 実装していないため try / except でフォールバック
-    try:
-        shap_int = explainer.shap_interaction_values([ctx, boats, lane_ids_f])
-        use_exact = True
-    except AttributeError:
-        # ---------- 近似的な Interaction 行列を自前計算 ----------
-        #   |SHAP_i * SHAP_j| の平均 ≈ 交互作用の強さとみなす
-        try:
-            shap_vals = explainer.shap_values([ctx, boats, lane_ids_f], check_additivity=False)
-        except AssertionError:
-            # DeepExplainer が sum-consistency でコケたときは GradientExplainer に切替
-            explainer = shap.GradientExplainer(model_wrap, [ctx, boats, lane_ids_f])
-            shap_vals = explainer.shap_values([ctx, boats, lane_ids_f], check_additivity=False)
-        ctx_sv   = np.asarray(shap_vals[0])        # shape (B,C)
-        boat_sv  = np.asarray(shap_vals[1])        # shape (B,6,F)
-
-        # 1) 環境 × 環境
-        ctx_int_mat = np.mean(np.abs(ctx_sv[:, :, None] * ctx_sv[:, None, :]), axis=0)  # (C,C)
-
-        # 2) Boat × Boat (lane 平均)
-        #    boat_sv: (B,6,F) → (B,6,F,1) * (B,6,1,F) → (B,6,F,F)
-        boat_pair = np.abs(boat_sv[:, :, :, None] * boat_sv[:, :, None, :])  # (B,6,F,F)
-        boat_int_mat = boat_pair.mean((0,1))                                 # lane & batch 平均 → (F,F)
-
-        # 3) 環境 × Boat
-        cross_raw = np.abs(ctx_sv[:, :, None, None] * boat_sv[:, None, :, :])  # (B,C,6,F)
-        cross_int = cross_raw.mean((0,2))                                       # (C,F)
-        use_exact = False
-    else:
-        # ---------- 正確な Interaction (DeepExplainer 対応版) ----------
-        # shap_int は list: [ctx_int, boat_int, lane_int]
-        #   ctx_int  : (B, C, C)
-        #   boat_int : (B, 6, F, 6, F)
-        ctx_int_mat  = np.abs(shap_int[0]).mean(0)                     # (C,C)
-        boat_int_raw = np.abs(shap_int[1])                             # (B,6,F,6,F)
-        boat_int_mat = boat_int_raw.mean((0,1,3))                      # (F,F)
-
-        cross_int    = boat_int_raw.mean((0,3))                        # (C,F)
-    msg = "exact" if use_exact else "approx"
-    print(f"[info] SHAP interaction mode: {msg}")
-
-        # --- ensure ctx_int_mat is 2‑D (Seaborn heatmap requirement) ---
-    while ctx_int_mat.ndim > 2:
-        ctx_int_mat = ctx_int_mat.mean(0)
-
-    # ---- ヒートマップ表示 ------------------------------------
-    # (A) 環境どうし
-    ctx_feat_names = ["air_temp","wind_speed","wave_height",
-                      "water_temp","wind_sin","wind_cos"]
-    plt.figure(figsize=(6,5))
-    sns.heatmap(ctx_int_mat, annot=False, square=True,
-                xticklabels=ctx_feat_names, yticklabels=ctx_feat_names,
-                cmap="coolwarm", center=0)
-    plt.title("SHAP Interaction – Environment × Environment")
-    plt.tight_layout()
-    plt.savefig(f"{save_prefix}_ctx_ctx.png", dpi=180)
-    plt.show()
-
-    # (B) Boat どうし
-        # --- ensure boat_int_mat is 2‑D ---
-    while boat_int_mat.ndim > 2:
-        # 平均を最後の軸に取って次元を潰す
-        boat_int_mat = boat_int_mat.mean(-1)
-    # feature 数とラベル長が合わなければ自動補完
-    
-    boat_feat_names = ["exh_time","st","weight"]         # ← BoatRaceDataset が渡す順
-    F = boat_int_mat.shape[0]
-    if len(boat_feat_names) != F:
-        boat_feat_names = [f"feat{i}" for i in range(F)]
-    plt.figure(figsize=(4,4))
-    sns.heatmap(boat_int_mat, annot=False, square=True,
-                xticklabels=boat_feat_names, yticklabels=boat_feat_names,
-                cmap="coolwarm", center=0)
-    plt.title("SHAP Interaction – Boat × Boat (lane平均)")
-    plt.tight_layout()
-    plt.savefig(f"{save_prefix}_boat_boat.png", dpi=180)
-    plt.show()
-
-    # (C) 環境 × Boat
-    while cross_int.ndim > 2:
-        # 平均を第1軸に取りつつ次元を潰す
-        cross_int = cross_int.mean(1)
-    plt.figure(figsize=(5,4))
-    sns.heatmap(cross_int, annot=False,
-                yticklabels=ctx_feat_names,
-                xticklabels=boat_feat_names,
-                cmap="coolwarm", center=0)
-    plt.title("SHAP Interaction – Environment × Boat")
-    plt.xlabel("Boat feature"), plt.ylabel("Env feature")
-    plt.tight_layout()
-    plt.savefig(f"{save_prefix}_ctx_boat.png", dpi=180)
-    plt.show()
-
-    # ---- 具体的なペアの数値を抜き出す例 ----------------------
-    # w_speed_idx   = ctx_feat_names.index("wind_speed")
-    # headwind_idx  = ctx_feat_names.index("wind_sin")   # sin<0 が追い風
-    # weight_idx    = boat_feat_names.index("weight")
-
-    # form_idxs = [i for i,n in enumerate(boat_feat_names) if "winrate" in n]  # 例
-    # form_wspeed = cross_int[w_speed_idx, weight_idx]
-    # weight_head = cross_int[headwind_idx, weight_idx]
-    # print(f"[form × wind_speed] interaction ≈ {form_wspeed:.4f}")
-    # print(f"[weight × headwind] interaction ≈ {weight_head:.4f}")
-
-# ─── 呼び出し ───
-shap_interaction_heatmap(model, loader_val, device=device, n_samples=128)
-
-
-# In[ ]:
-
-
-# ============================================================
-# ④ ── 「勾配が流れているか」を瞬時に確認する Snippet
-#       （エポック終了後 1 回だけ走らせれば十分）
-# ------------------------------------------------------------
-
-# ============================================================
- 
- # ============================================================
- # ⑤ ── 超小規模データで「過学習できるか」テスト関数
- #       必要時に呼び出して 0.1 以下まで loss が落ちるか確認
- # -----------------------------------------------------------
-
-
-# ---- tiny データで特徴量の分散を確認 -----------------------
-tiny_df = result_df.sample(10, random_state=1).reset_index(drop=True)
-num_cols = tiny_df.select_dtypes(include="number").columns
-
-# (1) 行間（=レース間）での分散
-print("► 行間 variance (should be >0):")
-print(tiny_df[num_cols].var().nsmallest(10))
-
-# (2) 同一レース内（= 6 艇間）での分散
-def per_race_var(col):
-    return tiny_df.groupby("race_key")[col].var().mean()
-
-per_race = {c: per_race_var(c) for c in num_cols}
-print("\n► 6 艇間 variance:")
-print(sorted(per_race.items(), key=lambda x: x[1])[:10])
-
-# ---- 呼び方例 ----
-overfit_tiny(result_df, device)
-# ============================================================
-
-
-# In[ ]:
+# In[101]:
 
 
 torch.save({

@@ -12,24 +12,6 @@ SET max_parallel_workers_per_gather = 4;
 SET parallel_leader_participation = on;
 
 -- Support join to 05 stats
-
-/* ---------- filtered_course（06から独立してここで定義） ---------- */
-CREATE MATERIALIZED VIEW IF NOT EXISTS feat.filtered_course AS
-SELECT
-    b.racer_id AS reg_no,
-    b.course,
-    COUNT(*) AS starts,
-    SUM(CASE WHEN r.rank = 1 THEN 1 ELSE 0 END) AS firsts,
-    SUM(CASE WHEN r.rank = 1 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*),0) AS first_rate,
-    SUM(CASE WHEN r.rank <= 2 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*),0) AS two_rate,
-    SUM(CASE WHEN r.rank <= 3 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*),0) AS three_rate
-FROM core.boat_info b
-JOIN core.results r ON b.race_key = r.race_key AND b.lane = r.lane
-JOIN core.races cr ON b.race_key = cr.race_key
-WHERE cr.stadium = '若 松'
-GROUP BY b.racer_id, b.course
-WITH NO DATA;
-
 -- Indexes to speed joins on filtered_course
 CREATE INDEX IF NOT EXISTS idx_feat_filtered_course_reg_course
   ON feat.filtered_course (reg_no, course);

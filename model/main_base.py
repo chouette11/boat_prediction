@@ -4,23 +4,6 @@
 # In[ ]:
 
 
-
-
-
-# In[ ]:
-
-
-
-
-
-
-
-# In[ ]:
-
-
-get_ipython().run_line_magic('load_ext', 'autoreload')
-get_ipython().run_line_magic('autoreload', '2')
-
 import torch
 import pandas as pd, psycopg2, os
 from sklearn.preprocessing import StandardScaler
@@ -127,6 +110,7 @@ with open("main_base.py", "w", encoding="utf-8") as f:
 
 
 load_dotenv(override=True)
+venue = '若 松'
 
 DB_CONF = {
     "host":     os.getenv("PGHOST", "localhost"),
@@ -140,10 +124,10 @@ DB_CONF = {
 # DB 接続
 # ------------------------------------------------------------------
 conn = psycopg2.connect(**DB_CONF)
-result_df = pd.read_sql("""
+result_df = pd.read_sql(f"""
     SELECT * FROM feat.train_features_base
     WHERE race_date <= '2024-12-31'
-    AND venue = '若 松'
+    AND venue = '{venue}'
 """, conn)
 
 
@@ -723,6 +707,7 @@ start_date = dt.date(2025, 1, 1)
 query = f"""
     SELECT * FROM feat.eval_features_base
     WHERE race_date BETWEEN '{start_date}' AND '{today}'
+    AND venue = '{venue}'
 """
 df_recent = pd.read_sql(query, conn)
 print(df_recent)
@@ -763,7 +748,7 @@ loader_eval, _df_eval_proc, _df_odds = analyzer._create_loader(df_recent)
 
 # 既に上で用意した rank_model は「rank_pred だけ」を返すアダプタ
 model.eval(); rank_model.eval()
-all_scores, all_ranks, all_keys, all_odds = [], [], [], []
+all_scores, all_ranks, all_keys = [], [], []
 
 print(_df_odds)
 
@@ -779,7 +764,6 @@ with torch.no_grad():
         all_ranks.append(ranks)
 
         # --- meta values (race_key / odds) ---
-        all_odds.append(_df_odds["trifecta_odds"].iloc[row_ptr : row_ptr + B].tolist())
         all_keys.extend(_df_eval_proc["race_key"].iloc[row_ptr : row_ptr + B].tolist())
         row_ptr += B
 

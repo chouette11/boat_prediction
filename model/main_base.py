@@ -4,27 +4,32 @@
 # In[ ]:
 
 
-import torch
-import pandas as pd, psycopg2, os
+
+
+
+# In[ ]:
+
+
+import os
+import pandas as pd
+import psycopg2
+import numpy as np
 from sklearn.preprocessing import StandardScaler
-from sklearn.isotonic import IsotonicRegression
-import numpy as np  
 import torch
-from torch.utils.data import Dataset, DataLoader
-import joblib
+from torch.utils.data import DataLoader
 import torch.nn as nn
 import datetime as dt
+import joblib
 from dotenv import load_dotenv
-import matplotlib.pyplot as plt
-# --- TensorBoard ---
+
 from torch.utils.tensorboard import SummaryWriter
 import time
-from BoatRaceDataset_base import BoatRaceDatasetBase     # ← MTL 対応版
+from BoatRaceDataset_base import BoatRaceDatasetBase
 from DualHeadRanker import DualHeadRanker
 import itertools
-
-# --- reproducibility helpers ---
-import random  # reproducibility helpers
+from dataclasses import dataclass, field
+from typing import Callable, Sequence, Dict
+import random
 
 SEED = 42
 random.seed(SEED)
@@ -35,16 +40,9 @@ if torch.cuda.is_available():
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
-# ----------------------------------------------------------------------
-# Feature‑engineering registry (declarative “add / drop” infrastructure)
-# ----------------------------------------------------------------------
-from dataclasses import dataclass, field
-from typing import Callable, Sequence, Dict
-import pandas as pd  # already imported above, but kept for clarity
 
 @dataclass
 class FeatureDef:
-    """Declarative feature definition."""
     name: str
     fn: Callable[[pd.DataFrame], pd.Series]
     deps: Sequence[str] = field(default_factory=tuple)  # for documentation
@@ -53,7 +51,6 @@ class FeatureDef:
 FEATURE_REGISTRY: Dict[str, FeatureDef] = {}
 
 def register_feature(fd: FeatureDef):
-    """Add a feature definition to the global registry."""
     FEATURE_REGISTRY[fd.name] = fd
 
 def apply_features(
@@ -76,13 +73,10 @@ def apply_features(
             df[n] = df[n].astype(fd.dtype)
     return df
 
-# --------------------------- default features --------------------------
 def _wind_sin(df: pd.DataFrame) -> pd.Series:
-    """Sine of wind direction (deg → rad)."""
     return np.sin(np.deg2rad(df["wind_dir_deg"]))
 
 def _wind_cos(df: pd.DataFrame) -> pd.Series:
-    """Cosine of wind direction (deg → rad)."""
     return np.cos(np.deg2rad(df["wind_dir_deg"]))
 
 
@@ -138,11 +132,8 @@ print(f"Loaded {len(result_df)} rows from the database.")
 
 
 result_df = apply_features(result_df)
-# 重要列の drop バグ修正：bf_course / bf_st_time / weight は保持する
-# 重要列の drop バグ修正：bf_course / bf_st_time / weight は保持する
-exclude = []  # ← 重要列はドロップしない（必要があればここに追加）
+exclude = []
 for lane in range(1, 7):
-      # --- 対象列を決める（ターゲット & キー列は除外） ---
       exclude.append(
             f"lane{lane}_bf_course",
       )
@@ -151,17 +142,10 @@ for lane in range(1, 7):
 
 result_df.drop(columns=exclude, inplace=True, errors="ignore")
 
-# numeric columns for StandardScaler
 BASE_NUM_COLS = ["air_temp", "wind_speed", "wave_height",
                  "water_temp", "wind_sin", "wind_cos"]
-# automatically pick up newly merged rolling features (suffix *_30d)
-HIST_NUM_COLS = [c for c in result_df.columns
-                 if c.endswith("_30d") and result_df[c].dtype != "object"]
-NUM_COLS = BASE_NUM_COLS + HIST_NUM_COLS
-print(f"[info] StandardScaler will use {len(NUM_COLS)} numeric cols "
-      f"({len(BASE_NUM_COLS)} base + {len(HIST_NUM_COLS)} hist)")
-scaler = StandardScaler().fit(result_df[NUM_COLS])
-result_df[NUM_COLS] = scaler.transform(result_df[NUM_COLS])
+NUM_COLS = BASE_NUM_COLS
+# NOTE: scaler fit/transform is performed AFTER the train/val split to avoid leakage
 
 bool_cols = [c for c in result_df.columns if c.endswith("_fs_flag")]
 result_df[bool_cols] = result_df[bool_cols].fillna(False).astype(bool)
@@ -169,59 +153,16 @@ result_df.to_csv("artifacts/train_features_base.csv", index=False)
 display(result_df.head())
 print("データフレーム全体の欠損値の総数:", result_df.isnull().sum().sum())
 
-# 各列の欠損値の割合を表示（0〜1の値）
 missing_ratio = result_df.isnull().mean()
-
-# パーセント表示にする場合（見やすさのため）
 missing_ratio_percent = missing_ratio * 100
 
 print("各列の欠損値の割合（%）:")
 print(missing_ratio_percent.sort_values(ascending=False))
 
 os.makedirs("artifacts", exist_ok=True)
-scaler_filename = "artifacts/wind_scaler.pkl"
-joblib.dump(scaler, scaler_filename)
 
 
 # In[ ]:
-
-
-def encode(col):
-    uniq = sorted(result_df[col].dropna().unique())
-    mapping = {v:i for i,v in enumerate(uniq)}
-    result_df[col + "_id"] = result_df[col].map(mapping).fillna(-1).astype("int16")
-    return mapping
-venue2id = encode("venue")
-# race_type2id = encode("race_type")
-
-
-# In[ ]:
-
-
-# ============================================================
-# 0) ── データの“ラベル & 特徴量”を 1 行だけ覗く可視化 Snippet
-#      ★★ ここは notebook なら「1 セルだけ」実行すれば OK ★★
-# ------------------------------------------------------------
-def peek_one(df: pd.DataFrame, seed: int = 0) -> None:
-    """
-    ランダムに 1 レース（1 行）だけ抜き取り、順位と主要特徴量を一覧表示
-    """
-    row = df.sample(1, random_state=seed).squeeze()
-
-    def lane_list(prefix: str):
-        return [row[f"lane{i}_{prefix}"] for i in range(1, 7)]
-
-    print("── sample race ──")
-    print("rank    :", lane_list("rank"))
-    print("exh_time:", lane_list("exh_time"))
-    print("st      :", lane_list("st"))
-    print("fs_flag :", lane_list("fs_flag"))
-    print("weight  :", lane_list("weight"))
-
-# ---------------------------------------------
-# ここで一度だけ呼んで目視確認しておくとズレにすぐ気付けます
-# peek_one(result_df)
-# ============================================================
 
 
 # ---------------- Loss / Regularization Weights -----------------
@@ -240,16 +181,16 @@ TOPK_WEIGHTS = [3.0, 2.0, 1.0]
 
 
 def pl_nll(scores: torch.Tensor, ranks: torch.Tensor, reduce: bool = True) -> torch.Tensor:
-    scores = scores.clamp(-20.0, 20.0)        # avoid Inf/NaN
+    scores = scores.clamp(-20.0, 20.0)
 
-    order = torch.argsort(ranks, dim=1)       # (B,6) winner→last
+    order = torch.argsort(ranks, dim=1)
     nll = torch.zeros(scores.size(0), device=scores.device)
     s = scores.clone()
 
     for pos in range(6):
-        log_denom = torch.logsumexp(s, dim=1)                 # (B,)
-        idx = order[:, pos]                                   # (B,)
-        chosen = s.gather(1, idx.unsqueeze(1)).squeeze(1)     # (B,)
+        log_denom = torch.logsumexp(s, dim=1)
+        idx = order[:, pos]
+        chosen = s.gather(1, idx.unsqueeze(1)).squeeze(1)
         nll += log_denom - chosen
         s = s.scatter(1, idx.unsqueeze(1), float('-inf'))
 
@@ -313,19 +254,69 @@ print("pl_nll should be ~0 :", pl_nll(scores, ranks).item())
 print("pl_nll_topk (k=3) should be ~0 :", pl_nll_topk(scores, ranks, k=TOPK_K, weights=TOPK_WEIGHTS).item())
 
 
-# In[ ]:
+# --- Adaptive validation splitter (ratio-based with safeguards) ---
+def choose_val_cutoff(
+    date_series: pd.Series,
+    target_ratio: float = 0.15,   # aim for ~15% as default
+    min_ratio: float = 0.10,      # don't go below 10%
+    max_ratio: float = 0.25,      # don't exceed 25%
+    min_days: int = 120,          # ensure seasonal coverage
+    min_val_races: int = 1000,    # ensure enough samples
+):
+    rd = pd.to_datetime(date_series).dt.date
+    latest = rd.max()
+    earliest = rd.min()
+    total_days = (latest - earliest).days + 1
+    N = len(rd)
+
+    # Compute required ratios by constraints
+    ratio_need_days  = min(max(min_days / max(total_days, 1), target_ratio), max_ratio)
+    ratio_need_cases = min(max(min_val_races / max(N, 1),    target_ratio), max_ratio)
+    r = max(min_ratio, min(max_ratio, max(ratio_need_days, ratio_need_cases, target_ratio)))
+
+    # Cut by row-weighted date quantile to hit ~r fraction in validation
+    cutoff_ts = pd.Series(pd.to_datetime(rd)).quantile(1 - r)
+    cutoff = cutoff_ts.date()
+
+    # Final safeguard: if days window fell below min_days, force-extend by days
+    if (latest - cutoff).days < min_days:
+        cutoff = latest - dt.timedelta(days=min_days)
+
+    return cutoff, r
 
 
 result_df["race_date"] = pd.to_datetime(result_df["race_date"]).dt.date
 latest_date = result_df["race_date"].max()
-cutoff = latest_date - dt.timedelta(days=90)
+
+# --- Choose adaptive cutoff based on total data size ---
+cutoff, val_ratio = choose_val_cutoff(
+    result_df["race_date"],
+    target_ratio=0.15,
+    min_ratio=0.10,
+    max_ratio=0.25,
+    min_days=120,
+    min_val_races=1000,
+)
+
+# Split
+df_tr = result_df[result_df["race_date"] <  cutoff].copy()
+df_va = result_df[result_df["race_date"] >= cutoff].copy()
+
+# ★ Fit scaler on TRAIN only, then transform both (leakage-free)
+scaler = StandardScaler().fit(df_tr[NUM_COLS])
+df_tr[NUM_COLS] = scaler.transform(df_tr[NUM_COLS])
+df_va[NUM_COLS] = scaler.transform(df_va[NUM_COLS])
 
 mode = "zscore"  # レース内zスコア運用
-ds_train = BoatRaceDatasetBase(result_df[result_df["race_date"] <  cutoff])
-ds_val   = BoatRaceDatasetBase(result_df[result_df["race_date"] >= cutoff])
+
+# Datasets / loaders
+ds_train = BoatRaceDatasetBase(df_tr)
+ds_val   = BoatRaceDatasetBase(df_va)
 
 loader_train = DataLoader(ds_train, batch_size=256, shuffle=True)
 loader_val   = DataLoader(ds_val,   batch_size=512)
+
+print(f"[split] cutoff={cutoff}  val_ratio≈{val_ratio:.3f}  N_train={len(ds_train)}  N_val={len(ds_val)}  days={(latest_date - cutoff).days}")
 
 # ------------------- ⑤ 学習ループ（LR↓ + Clip） --------------
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -447,9 +438,6 @@ def evaluate_model(model, dataset, device):
 
 # In[ ]:
 
-
-# ---------------------------------------------------------------------
-# print(f"train: {len(ds_train)}  val: {len(ds_val)}"
 
 EPOCHS = 20
 # --- TensorBoard setup ---
@@ -700,9 +688,7 @@ from roi_util import ROIAnalyzer
 #     model.load_state_dict(torch.load(model_path, map_location=device))
 
 today = dt.date.today()
-# 2025年1月1日以降のデータを取得する場合は、以下の行を変更してください。
 start_date = dt.date(2025, 1, 1)
-# start_date = today - dt.timedelta(days=20)
 
 query = f"""
     SELECT * FROM feat.eval_features_base
@@ -712,14 +698,8 @@ query = f"""
 df_recent = pd.read_sql(query, conn)
 print(df_recent)
 
-
 df_recent.drop(columns=exclude, inplace=True, errors="ignore")
-
 df_recent.to_csv("artifacts/eval_features_recent_base.csv", index=False)
-
-if df_recent.empty:
-    print("[simulate] No rows fetched for last 3 months.")
-
 print(f"[simulate] Loaded {len(df_recent)} rows ({start_date} – {today}).")
 print(f"columns: {', '.join(df_recent.columns)}")
 
@@ -778,9 +758,6 @@ all_ranks  = torch.cat(all_ranks,  dim=0)   # (N,6)
 # --------------------------------------------------------------------------
 #  グループ Ablation: 重要列を 5～6 個まとめてドロップして val_nll を比較
 # --------------------------------------------------------------------------
-
-
-
 def permute_importance(model, dataset, device="cpu", cols=None):
     """
     Permutation importance: 各特徴量列をランダムに permute して val_nll の悪化量を調べる
@@ -1635,15 +1612,4 @@ tri_df.to_csv("artifacts/pred_trifecta_topk.csv", index=False)
 # connのクローズ
 conn.close()
 print("[predict] Prediction completed and saved to artifacts directory.")
-
-
-# In[ ]:
-
-
-torch.save({
-    "state_dict": model.state_dict(),
-    "scaler": scaler_filename,
-    "venue2id": venue2id,
-    # "race_type2id": race_type2id
-}, "cplnet_checkpoint.pt")
 

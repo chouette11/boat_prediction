@@ -10,6 +10,24 @@
 # In[ ]:
 
 
+
+
+
+
+
+# In[ ]:
+
+
+
+
+
+
+
+
+
+# In[ ]:
+
+
 import os
 import pandas as pd
 import psycopg2
@@ -83,7 +101,7 @@ register_feature(FeatureDef("wind_sin", _wind_sin, deps=["wind_dir_deg"]))
 register_feature(FeatureDef("wind_cos", _wind_cos, deps=["wind_dir_deg"]))
 
 
-# In[155]:
+# In[ ]:
 
 
 import nbformat
@@ -144,6 +162,7 @@ NUM_COLS = BASE_NUM_COLS
 
 bool_cols = [c for c in result_df.columns if c.endswith("_fs_flag")]
 result_df[bool_cols] = result_df[bool_cols].fillna(False).astype(bool)
+os.makedirs("artifacts", exist_ok=True)
 result_df.to_csv("artifacts/train_features_base.csv", index=False)
 display(result_df.head())
 print("データフレーム全体の欠損値の総数:", result_df.isnull().sum().sum())
@@ -157,7 +176,7 @@ print(missing_ratio_percent.sort_values(ascending=False))
 os.makedirs("artifacts", exist_ok=True)
 
 
-# In[142]:
+# In[ ]:
 
 
 # ---------------- Loss / Regularization Weights -----------------
@@ -310,7 +329,7 @@ model = DualHeadRanker(boat_in=boat_dim).to(device)
 opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=5e-5)
 
 
-# In[145]:
+# In[ ]:
 
 
 def evaluate_model(model, dataset, device):
@@ -418,7 +437,7 @@ def evaluate_model(model, dataset, device):
 #     print("[diag]   ► finished quick diagnostics\n")
 
 
-# In[146]:
+# In[ ]:
 
 
 EPOCHS = 20
@@ -523,7 +542,7 @@ torch.save(model.state_dict(), model_path)
 print(f"Model saved to {model_path}")
 
 
-# In[147]:
+# In[ ]:
 
 
 # ---- Monkey‑patch ROIAnalyzer so it uses BoatRaceDataset2 (MTL) ----------
@@ -580,25 +599,43 @@ analyzer = ROIAnalyzer(model=rank_model, scaler=scaler,
 print("[predict] Evaluating confidence & trifecta rank on recent predictions…")
 
 loader_eval, _df_eval_proc, _df_odds = analyzer._create_loader(df_recent)
+# --- alignment sanity checks (DataLoader order vs. preprocessed DF) ---
+assert len(_df_eval_proc) == len(loader_eval.dataset), \
+       "[predict] Mismatch between eval frame and dataset length; race_key alignment may break."
+try:
+    from torch.utils.data import SequentialSampler
+    if not isinstance(loader_eval.sampler, SequentialSampler):
+        print("[warn] loader_eval sampler is not SequentialSampler; race_key alignment may be invalid.")
+except Exception:
+    # older PyTorch/DataLoader variants may not expose .sampler cleanly
+    pass
 model.eval(); rank_model.eval()
 all_scores, all_ranks, all_keys = [], [], []
 row_ptr = 0
-with torch.no_grad():
+with torch.inference_mode():
     for ctx, boats, lane_ids, ranks, _, __ in loader_eval:
         ctx, boats, lane_ids = ctx.to(device), boats.to(device), lane_ids.to(device)
         scores = rank_model(ctx, boats, lane_ids)
         B = scores.size(0)
 
         all_scores.append(scores.cpu())
-        all_ranks.append(ranks)
+        all_ranks.append(ranks.cpu())
         all_keys.extend(_df_eval_proc["race_key"].iloc[row_ptr : row_ptr + B].tolist())
         row_ptr += B
 
-all_scores = torch.cat(all_scores, dim=0)   # (N,6)
-all_ranks  = torch.cat(all_ranks,  dim=0)   # (N,6)
+# --- handle empty eval loader to avoid cat() errors ---
+if len(all_scores) == 0:
+    # Produce empty tensors to keep downstream code from crashing
+    all_scores = torch.empty((0, 6), dtype=torch.float32)
+    all_ranks  = torch.empty((0, 6), dtype=torch.int64)
+    all_keys   = []
+    print("[predict] loader_eval produced no batches; continuing with empty outputs.")
+else:
+    all_scores = torch.cat(all_scores, dim=0)   # (N,6)
+    all_ranks  = torch.cat(all_ranks,  dim=0)   # (N,6)
 
 
-# In[149]:
+# In[ ]:
 
 
 # --------------------------------------------------------------------------
@@ -683,7 +720,7 @@ def run_ablation_groups(
         ld_tr = DataLoader(ds_tr, batch_size=256, shuffle=True)
         ld_va = DataLoader(ds_va, batch_size=512)
 
-        model = DualHeadRanker().to(device)
+        model = DualHeadRanker(boat_in=ds_tr.boat_dim).to(device)
         opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=5e-5)
 
         for _ in range(epochs):
@@ -693,7 +730,7 @@ def run_ablation_groups(
                 lane_ids, ranks = lane_ids.to(device), ranks.to(device)
                 
                 st_true, st_mask = st_true.to(device), st_mask.to(device)
-                st_pred, scores = model(ctx, boats, lane_ids)
+                st_pred, scores, _ = model(ctx, boats, lane_ids)
                 pl_loss = pl_nll_topk(scores, ranks, k=TOPK_K, weights=TOPK_WEIGHTS)
                 mse_st = ((st_pred - st_true) ** 2 * st_mask.float()).sum() / st_mask.float().sum()
                 loss = pl_loss + LAMBDA_ST * mse_st
@@ -714,8 +751,8 @@ print(f"[saved] {imp_path}")
 # In[ ]:
 
 
-df_scores = pd.DataFrame(all_scores.numpy(), columns=[f"lane{i+1}_score" for i in range(6)])
-df_ranks = pd.DataFrame(all_ranks.numpy(), columns=[f"lane{i+1}_rank" for i in range(6)])
+df_scores = pd.DataFrame(all_scores.numpy(), columns=[f"lane{i}_score" for i in range(1, 7)])
+df_ranks  = pd.DataFrame(all_ranks.numpy(),  columns=[f"lane{i}_rank"  for i in range(1, 7)])
 df_score_ranks = pd.concat([df_scores, df_ranks], axis=1)   
 df_score_ranks["race_key"] = all_keys
 
@@ -815,7 +852,7 @@ for n in range(1, 6):
 
 
 
-# In[151]:
+# In[ ]:
 
 
 def top1_accuracy(scores: torch.Tensor, ranks: torch.Tensor) -> float:
@@ -1056,7 +1093,7 @@ with open(metrics_path, "a", newline="") as f:
 print(f"[saved] {metrics_path}")
 
 
-# In[152]:
+# In[ ]:
 
 
 # === 条件別ヒット率/ROI 分析（修正版） =========================
@@ -1103,7 +1140,7 @@ except Exception as e:
     model.eval(); rank_model.eval()
     _sc_list = []
     with torch.no_grad():
-        for ctx, boats, lane_ids, _ranks in loader_eval:
+        for ctx, boats, lane_ids, _ranks, _, __ in loader_eval:
             ctx, boats, lane_ids = ctx.to(device), boats.to(device), lane_ids.to(device)
             _sc = rank_model(ctx, boats, lane_ids)
             _sc_list.append(_sc.cpu())
@@ -1326,7 +1363,7 @@ else:
     print("[cond] ROI 集計が空のため、best ROI CSV の出力はスキップしました。")
 
 
-# In[153]:
+# In[ ]:
 
 
 # prediction
@@ -1443,7 +1480,7 @@ tri_df = tri_df.merge(
 tri_df.to_csv("artifacts/pred_trifecta_topk.csv", index=False)
 
 
-# In[154]:
+# In[ ]:
 
 
 # connのクローズ

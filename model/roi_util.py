@@ -24,37 +24,72 @@ class ROIAnalyzer:
         self.num_cols = num_cols
         self.device = device
         self.batch_size = batch_size
-        self.batch_size = batch_size
 
     @staticmethod
-    def preprocess_df(df: pd.DataFrame, scaler, num_cols) -> pd.DataFrame:
+    def _preprocess_core(df: pd.DataFrame, scaler, num_cols, *, pred_mode: bool = False) -> pd.DataFrame:
         df = df.copy()
 
+        # (A) directional wind features
         if "wind_dir_deg" in df.columns:
             df["wind_dir_rad"] = np.deg2rad(df["wind_dir_deg"])
             df["wind_sin"] = np.sin(df["wind_dir_rad"])
             df["wind_cos"] = np.cos(df["wind_dir_rad"])
         else:
-            print("⚠️ wind_dir_deg が存在しないため wind_sin / wind_cos をスキップします。")
+            msg = "⚠️ (pred) wind_dir_deg が存在しないため wind_sin / wind_cos をスキップします。" if pred_mode \
+                  else "⚠️ wind_dir_deg が存在しないため wind_sin / wind_cos をスキップします。"
+            print(msg)
 
-        available_cols = [col for col in num_cols if col in df.columns]
-        df[available_cols] = scaler.transform(df[available_cols])
+        # (B) numeric transform (order‑preserving; align to scaler.fit columns)
+        expected = list(num_cols)
+        if hasattr(scaler, "mean_") and getattr(scaler, "mean_", None) is not None \
+           and len(scaler.mean_) == len(expected):
+            for i, col in enumerate(expected):
+                if col not in df.columns:
+                    # back‑fill missing column with train mean → standardized 0
+                    df[col] = float(scaler.mean_[i])
+                else:
+                    df[col] = pd.to_numeric(df[col], errors="coerce").fillna(float(scaler.mean_[i]))
+        else:
+            for col in expected:
+                if col not in df.columns:
+                    df[col] = 0.0
+                else:
+                    df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+        df[expected] = scaler.transform(df[expected])
 
+        # (C) boolean flags normalization
         bool_cols = [c for c in df.columns if c.endswith("_fs_flag")]
-        df[bool_cols] = df[bool_cols].fillna(False).astype(bool)
+        if len(bool_cols):
+            df[bool_cols] = df[bool_cols].fillna(False).astype(bool)
 
+        # (D) safety columns for ranks (keeps downstream code stable)
         rank_cols = [f"lane{l}_rank" for l in range(1, 7)]
-        # Ensure rank columns exist (prediction tables may not have them)
         for c in rank_cols:
             if c not in df.columns:
                 df[c] = 7
         df[rank_cols] = df[rank_cols].fillna(7).astype("int32")
+
+        # (E) prediction‑only placeholders for finishers
+        if pred_mode:
+            for c, v in zip(["first_lane", "second_lane", "third_lane"], [1, 2, 3]):
+                if c not in df.columns:
+                    df[c] = v
+            df[["first_lane", "second_lane", "third_lane"]] = \
+                df[["first_lane", "second_lane", "third_lane"]].astype("int32")
+
         return df
+
+    @staticmethod
+    def preprocess_df(df: pd.DataFrame, scaler, num_cols) -> pd.DataFrame:
+        return ROIAnalyzer._preprocess_core(df, scaler, num_cols, pred_mode=False)
+
+    def _build_loader(self, df: pd.DataFrame) -> DataLoader:
+        ds_eval = BoatRaceDatasetBase(df)
+        return DataLoader(ds_eval, batch_size=self.batch_size, shuffle=False)
 
     def _create_loader(self, df_eval: pd.DataFrame, is_pred: bool = False) -> Tuple[DataLoader, pd.DataFrame, pd.DataFrame]:
         df = self.preprocess_df(df_eval, self.scaler, self.num_cols)
-        ds_eval = BoatRaceDatasetBase(df)
-        loader = DataLoader(ds_eval, batch_size=self.batch_size, shuffle=False)
+        loader = self._build_loader(df)
         if not is_pred:
             df_odds = df[["race_key", "trifecta_odds"]].copy()
             return loader, df, df_odds
@@ -71,43 +106,12 @@ class ROIPredictor(ROIAnalyzer):
     @staticmethod
     def preprocess_df_pred(df: pd.DataFrame, scaler, num_cols) -> pd.DataFrame:
         df = df.copy()
+        return ROIAnalyzer._preprocess_core(df, scaler, num_cols, pred_mode=True)
 
-        # (1) directional wind features if available
-        if "wind_dir_deg" in df.columns:
-            df["wind_dir_rad"] = np.deg2rad(df["wind_dir_deg"])
-            df["wind_sin"] = np.sin(df["wind_dir_rad"])
-            df["wind_cos"] = np.cos(df["wind_dir_rad"])
-        else:
-            print("⚠️ (pred) wind_dir_deg が存在しないため wind_sin / wind_cos をスキップします。")
-
-        # (2) scale numeric columns that are present
-        available_cols = [col for col in num_cols if col in df.columns]
-        if len(available_cols):
-            df[available_cols] = scaler.transform(df[available_cols])
-
-        # (3) bool flags
-        bool_cols = [c for c in df.columns if c.endswith("_fs_flag")]
-        if len(bool_cols):
-            df[bool_cols] = df[bool_cols].fillna(False).astype(bool)
-
-        # (4) ensure lane*_rank exist (not used at pred-time but keeps downstream code safe)
-        rank_cols = [f"lane{l}_rank" for l in range(1, 7)]
-        for c in rank_cols:
-            if c not in df.columns:
-                df[c] = 7
-        df[rank_cols] = df[rank_cols].fillna(7).astype("int32")
-
-        # (5) ensure placeholders for first/second/third finishers (not used for probs)
-        for c, v in zip(["first_lane", "second_lane", "third_lane"], [1, 2, 3]):
-            if c not in df.columns:
-                df[c] = v
-        df[["first_lane", "second_lane", "third_lane"]] = df[["first_lane", "second_lane", "third_lane"]].astype("int32")
-
-        return df
-
-    def _create_loader_pred(self, df_eval: pd.DataFrame) -> Tuple[DataLoader, pd.DataFrame, np.ndarray]:
-        # Use the same preprocessing & loader as ROIAnalyzer (unified path / BR2Dataset via monkey-patch)
-        return self._create_loader(df_eval, is_pred=True)
+    def _create_loader_pred(self, df_eval: pd.DataFrame) -> Tuple[DataLoader, pd.DataFrame, pd.DataFrame]:
+        df = self.preprocess_df_pred(df_eval, self.scaler, self.num_cols)
+        loader = self._build_loader(df)
+        return loader, df, pd.DataFrame()
 
     def predict_scores(self, df_eval: pd.DataFrame, include_meta: bool = True, save_to: Optional[str] = None) -> pd.DataFrame:
         """
@@ -116,7 +120,7 @@ class ROIPredictor(ROIAnalyzer):
         loader, df, _ = self._create_loader_pred(df_eval)
         self.model.eval()
         outs = []
-        with torch.no_grad():
+        with torch.inference_mode():
             for ctx, boats, lane_ids, _, __, ___ in loader:
                 ctx, boats, lane_ids = ctx.to(self.device), boats.to(self.device), lane_ids.to(self.device)
                 scores = self.model(ctx, boats, lane_ids)  # (B,6) logits
@@ -186,7 +190,9 @@ class ROIPredictor(ROIAnalyzer):
 
         exacta_rows, trifecta_rows = [], []
         for r in range(N):
-            es = np.exp(tau * S[r])             # (6,)
+            Sr = S[r]
+            Sr = Sr - Sr.max()                  # numerical stability
+            es = np.exp(tau * Sr)               # (6,)
             denom0 = es.sum()
             # --- Exacta ---
             pairs = []

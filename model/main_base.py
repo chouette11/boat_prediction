@@ -19,7 +19,6 @@ import torch
 from torch.utils.data import DataLoader
 import torch.nn as nn
 import datetime as dt
-import joblib
 from dotenv import load_dotenv
 
 from torch.utils.tensorboard import SummaryWriter
@@ -45,8 +44,8 @@ torch.backends.cudnn.benchmark = False
 class FeatureDef:
     name: str
     fn: Callable[[pd.DataFrame], pd.Series]
-    deps: Sequence[str] = field(default_factory=tuple)  # for documentation
-    dtype: str = None                            # optional cast
+    deps: Sequence[str] = field(default_factory=tuple)
+    dtype: str = None
 
 FEATURE_REGISTRY: Dict[str, FeatureDef] = {}
 
@@ -84,7 +83,7 @@ register_feature(FeatureDef("wind_sin", _wind_sin, deps=["wind_dir_deg"]))
 register_feature(FeatureDef("wind_cos", _wind_cos, deps=["wind_dir_deg"]))
 
 
-# In[ ]:
+# In[155]:
 
 
 import nbformat
@@ -114,9 +113,6 @@ DB_CONF = {
     "password": os.getenv("PGPASSWORD", "secret"),
 }
 
-# ------------------------------------------------------------------
-# DB 接続
-# ------------------------------------------------------------------
 conn = psycopg2.connect(**DB_CONF)
 result_df = pd.read_sql(f"""
     SELECT * FROM feat.train_features_base
@@ -145,7 +141,6 @@ result_df.drop(columns=exclude, inplace=True, errors="ignore")
 BASE_NUM_COLS = ["air_temp", "wind_speed", "wave_height",
                  "water_temp", "wind_sin", "wind_cos"]
 NUM_COLS = BASE_NUM_COLS
-# NOTE: scaler fit/transform is performed AFTER the train/val split to avoid leakage
 
 bool_cols = [c for c in result_df.columns if c.endswith("_fs_flag")]
 result_df[bool_cols] = result_df[bool_cols].fillna(False).astype(bool)
@@ -162,7 +157,7 @@ print(missing_ratio_percent.sort_values(ascending=False))
 os.makedirs("artifacts", exist_ok=True)
 
 
-# In[ ]:
+# In[142]:
 
 
 # ---------------- Loss / Regularization Weights -----------------
@@ -201,13 +196,6 @@ def pl_nll_topk(scores: torch.Tensor,
                 k: int = 3,
                 weights=None,
                 reduce: bool = True) -> torch.Tensor:
-    """
-    Top-k Plackett–Luce negative log-likelihood.
-   k: number of leading positions (default 3).
-    weights: length-k list/1D Tensor of non-negative weights; if None → uniform 1.0
-    reduce: if False, returns per-sample loss (B,); otherwise mean.
-    """
-    # numeric stability
     scores = scores.clamp(-20.0, 20.0)
     B, C = scores.shape
     k = int(min(max(k, 1), C))
@@ -254,7 +242,9 @@ print("pl_nll should be ~0 :", pl_nll(scores, ranks).item())
 print("pl_nll_topk (k=3) should be ~0 :", pl_nll_topk(scores, ranks, k=TOPK_K, weights=TOPK_WEIGHTS).item())
 
 
-# --- Adaptive validation splitter (ratio-based with safeguards) ---
+# In[ ]:
+
+
 def choose_val_cutoff(
     date_series: pd.Series,
     target_ratio: float = 0.15,   # aim for ~15% as default
@@ -269,16 +259,13 @@ def choose_val_cutoff(
     total_days = (latest - earliest).days + 1
     N = len(rd)
 
-    # Compute required ratios by constraints
     ratio_need_days  = min(max(min_days / max(total_days, 1), target_ratio), max_ratio)
     ratio_need_cases = min(max(min_val_races / max(N, 1),    target_ratio), max_ratio)
     r = max(min_ratio, min(max_ratio, max(ratio_need_days, ratio_need_cases, target_ratio)))
 
-    # Cut by row-weighted date quantile to hit ~r fraction in validation
     cutoff_ts = pd.Series(pd.to_datetime(rd)).quantile(1 - r)
     cutoff = cutoff_ts.date()
 
-    # Final safeguard: if days window fell below min_days, force-extend by days
     if (latest - cutoff).days < min_days:
         cutoff = latest - dt.timedelta(days=min_days)
 
@@ -288,7 +275,6 @@ def choose_val_cutoff(
 result_df["race_date"] = pd.to_datetime(result_df["race_date"]).dt.date
 latest_date = result_df["race_date"].max()
 
-# --- Choose adaptive cutoff based on total data size ---
 cutoff, val_ratio = choose_val_cutoff(
     result_df["race_date"],
     target_ratio=0.15,
@@ -298,18 +284,14 @@ cutoff, val_ratio = choose_val_cutoff(
     min_val_races=1000,
 )
 
-# Split
 df_tr = result_df[result_df["race_date"] <  cutoff].copy()
 df_va = result_df[result_df["race_date"] >= cutoff].copy()
 
-# ★ Fit scaler on TRAIN only, then transform both (leakage-free)
 scaler = StandardScaler().fit(df_tr[NUM_COLS])
 df_tr[NUM_COLS] = scaler.transform(df_tr[NUM_COLS])
 df_va[NUM_COLS] = scaler.transform(df_va[NUM_COLS])
 
-mode = "zscore"  # レース内zスコア運用
-
-# Datasets / loaders
+mode = "zscore"  
 ds_train = BoatRaceDatasetBase(df_tr)
 ds_val   = BoatRaceDatasetBase(df_va)
 
@@ -328,7 +310,7 @@ model = DualHeadRanker(boat_in=boat_dim).to(device)
 opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=5e-5)
 
 
-# In[ ]:
+# In[145]:
 
 
 def evaluate_model(model, dataset, device):
@@ -436,7 +418,7 @@ def evaluate_model(model, dataset, device):
 #     print("[diag]   ► finished quick diagnostics\n")
 
 
-# In[ ]:
+# In[146]:
 
 
 EPOCHS = 20
@@ -530,131 +512,6 @@ for epoch in range(EPOCHS):
     print(f"epoch {epoch:2d}  train_nll {tr_nll:.4f}  val_nll {val_nll:.4f}  |grad| {avg_grad:.2e}")
     print(f"ST MSE: {st_mse_val:.4f}  ST MAE: {st_mae_val:.4f}")
 
-    # ---- accuracy & 三連単的中率 ----
-    def top1_accuracy(scores, ranks):
-        pred_top1 = scores.argmax(dim=1)
-        true_top1 = (ranks == 1).nonzero(as_tuple=True)[1]
-        return (pred_top1 == true_top1).float().mean().item()
-
-    def trifecta_hit_rate(scores, ranks):
-        """
-        三連単的中率（予測スコア上位3頭の順番が、実際の1〜3着と完全一致する割合）
-        """
-        pred_top3 = torch.topk(scores, k=3, dim=1).indices
-        true_top3 = torch.topk(-ranks, k=3, dim=1).indices  # 小さい順に1〜3着
-        hit = [p.tolist() == t.tolist() for p, t in zip(pred_top3, true_top3)]
-        return sum(hit) / len(hit)
-
-    # accuracy 評価
-    model.eval(); all_scores, all_ranks = [], []
-    with torch.no_grad():
-        for ctx, boats, lane_ids, ranks, _, _ in loader_val:
-            ctx, boats = ctx.to(device), boats.to(device)
-            lane_ids = lane_ids.to(device)
-            _, scores, _ = model(ctx, boats, lane_ids)
-            all_scores.append(scores.cpu())
-            all_ranks.append(ranks)
-
-    all_scores = torch.cat(all_scores, dim=0)
-    all_ranks = torch.cat(all_ranks, dim=0)
-
-    acc_top1 = top1_accuracy(all_scores, all_ranks)
-    acc_tri3 = trifecta_hit_rate(all_scores, all_ranks)
-    writer.add_scalar("loss/train_nll",  tr_nll,  epoch)
-    writer.add_scalar("loss/val_nll",    val_nll, epoch)
-    writer.add_scalar("acc/top1",        acc_top1, epoch)
-    writer.add_scalar("acc/trifecta_hit", acc_tri3, epoch)
-    # --- ST metrics to TensorBoard
-    writer.add_scalar("st/mse", st_mse_val, epoch)
-    writer.add_scalar("st/mae", st_mae_val, epoch)
-
-    # --- スコア分散と三連単ランク分析 ---
-    def score_confidence_analysis(scores: torch.Tensor) -> torch.Tensor:
-        return scores.var(dim=1)
-
-    def get_trifecta_rank(scores: torch.Tensor, true_ranks: torch.Tensor) -> list:
-        from itertools import permutations
-        B = scores.size(0)
-        results = []
-
-        for b in range(B):
-            score = scores[b]
-            true_rank = true_ranks[b]
-            true_top3 = [i for i, r in enumerate(true_rank.tolist()) if r <= 3]
-            true_top3_sorted = [x for _, x in sorted(zip(true_rank[true_top3], true_top3))]
-
-            trifecta_list = list(permutations(range(6), 3))
-            trifecta_scores = [(triplet, score[list(triplet)].sum().item()) for triplet in trifecta_list]
-            trifecta_scores.sort(key=lambda x: x[1], reverse=True)
-
-            for rank_idx, (triplet, _) in enumerate(trifecta_scores):
-                if list(triplet) == true_top3_sorted:
-                    results.append(rank_idx + 1)
-                    break
-            else:
-                results.append(121)
-        return results
-
-    score_vars = score_confidence_analysis(all_scores)
-    tri_ranks = get_trifecta_rank(all_scores, all_ranks)
-    mean_var = score_vars.mean().item()
-    median_var = score_vars.median().item()
-    mean_tri_rank = np.mean(tri_ranks)
-
-    # print(f"スコア分散の平均: {mean_var:.4f}")
-    # print(f"スコア分散の中央値: {median_var:.4f}")
-    # print(f"正解三連単の予測ランク（平均）: {mean_tri_rank:.2f}")
-
-    writer.add_scalar("score_variance/mean", mean_var, epoch)
-    writer.add_scalar("score_variance/median", median_var, epoch)
-    writer.add_scalar("trifecta_rank/mean", mean_tri_rank, epoch)
-
-    # print(f"Top-1 Acc: {acc_top1:.3f}   Trifecta Hit: {acc_tri3:.3f}")
-
-    # ------------------------------------------------------------------
-    #  Export raw softmax probabilities (6‑class) + winner label (val set)
-    # ------------------------------------------------------------------
-    if epoch == EPOCHS - 1:   # export once after final epoch
-        print("[export] Saving raw softmax probabilities for calibration …")
-        with torch.no_grad():
-            ctx_all, boats_all, lane_ids_all, ranks_all = [], [], [], []
-            for ctx, boats, lane_ids, ranks, *_ in loader_val:
-                ctx_all.append(ctx); boats_all.append(boats)
-                lane_ids_all.append(lane_ids); ranks_all.append(ranks)
-
-            ctx_all   = torch.cat(ctx_all).to(device)
-            boats_all = torch.cat(boats_all).to(device)
-            lane_ids_all = torch.cat(lane_ids_all).to(device)
-            ranks_all = torch.cat(ranks_all).to(device)
-
-            _, score_all, _ = model(ctx_all, boats_all, lane_ids_all)
-            prob_all = torch.softmax(score_all / TEMPERATURE, dim=1)  # (N,6)
-
-            # winner label: 0..5
-            winner_idx = (ranks_all == 1).nonzero(as_tuple=True)[1].cpu().numpy()
-
-            df_probs = pd.DataFrame(prob_all.cpu().numpy(),
-                                    columns=[f"prob_lane{i}" for i in range(1,7)])
-            df_probs["winner"] = winner_idx
-            probs_path = "artifacts/raw_probs_val.csv"
-
-    # ---- 学習ログを CSV へ追記保存 ----
-    import csv
-    os.makedirs("artifacts", exist_ok=True)
-    log_path = f"artifacts/train_{mode}.csv"
-    # 1回目だけヘッダーを書き込む
-    write_header = epoch == 0 and not os.path.exists(log_path)
-    with open(log_path, mode="a", newline="") as f:
-        writer_csv = csv.writer(f)
-        if write_header:
-            writer_csv.writerow(["epoch", "train_nll", "val_nll", "top1_acc", "trifecta_hit",
-                                 "score_var_mean", "score_var_median", "tri_rank_mean",
-                                 "st_mse", "st_mae"])
-        writer_csv.writerow([epoch, tr_nll, val_nll, acc_top1, acc_tri3,
-                             mean_var, median_var, mean_tri_rank,
-                             st_mse_val, st_mae_val])
-
-
 # --- Close TensorBoard writer after training ---
 writer.close()
 
@@ -666,7 +523,7 @@ torch.save(model.state_dict(), model_path)
 print(f"Model saved to {model_path}")
 
 
-# In[ ]:
+# In[147]:
 
 
 # ---- Monkey‑patch ROIAnalyzer so it uses BoatRaceDataset2 (MTL) ----------
@@ -720,18 +577,11 @@ rank_model = _RankOnly(model).to(device)
 analyzer = ROIAnalyzer(model=rank_model, scaler=scaler,
                        num_cols=NUM_COLS, device=device)
 
-# --- 予測でも「自信度」と「正解三連単の順位」を評価し、CSV に記録 ---
 print("[predict] Evaluating confidence & trifecta rank on recent predictions…")
 
-# ROIAnalyzer の前処理（スケーリング等）をそのまま使ってローダを作成
 loader_eval, _df_eval_proc, _df_odds = analyzer._create_loader(df_recent)
-
-# 既に上で用意した rank_model は「rank_pred だけ」を返すアダプタ
 model.eval(); rank_model.eval()
 all_scores, all_ranks, all_keys = [], [], []
-
-print(_df_odds)
-
 row_ptr = 0
 with torch.no_grad():
     for ctx, boats, lane_ids, ranks, _, __ in loader_eval:
@@ -739,20 +589,16 @@ with torch.no_grad():
         scores = rank_model(ctx, boats, lane_ids)
         B = scores.size(0)
 
-        # --- core outputs ---
         all_scores.append(scores.cpu())
         all_ranks.append(ranks)
-
-        # --- meta values (race_key / odds) ---
         all_keys.extend(_df_eval_proc["race_key"].iloc[row_ptr : row_ptr + B].tolist())
         row_ptr += B
-
 
 all_scores = torch.cat(all_scores, dim=0)   # (N,6)
 all_ranks  = torch.cat(all_ranks,  dim=0)   # (N,6)
 
 
-# In[ ]:
+# In[149]:
 
 
 # --------------------------------------------------------------------------
@@ -868,19 +714,14 @@ print(f"[saved] {imp_path}")
 # In[ ]:
 
 
-# all_ranksとall_scoresを結合したdfに変換
 df_scores = pd.DataFrame(all_scores.numpy(), columns=[f"lane{i+1}_score" for i in range(6)])
 df_ranks = pd.DataFrame(all_ranks.numpy(), columns=[f"lane{i+1}_rank" for i in range(6)])
 df_score_ranks = pd.concat([df_scores, df_ranks], axis=1)   
 df_score_ranks["race_key"] = all_keys
 
-# df_mergedから重複行を削除
 df_score_ranks = df_score_ranks.drop_duplicates()
-
-# merge odds from df_trifecta_met_hit by race_key
 df_score_ranks = df_score_ranks.merge(_df_odds[["race_key","trifecta_odds"]], on="race_key", how="left")
 
-# --- lane 列をまとめて list 化 ---
 score_cols = [f"lane{i}_score" for i in range(1, 7)]
 rank_cols  = [f"lane{i}_rank"  for i in range(1, 7)]
 
@@ -890,6 +731,7 @@ df_score_ranks["scores"] = df_score_ranks[score_cols].apply(
 df_score_ranks["ranks"] = df_score_ranks[rank_cols].apply(
     lambda r: [int(x) for x in r.values.tolist()], axis=1
 )
+df_score_ranks = df_score_ranks.drop(columns=score_cols + rank_cols)
 
 from itertools import permutations
 
@@ -947,15 +789,11 @@ df_score_ranks["true_order_rank"] = df_score_ranks.apply(
     lambda row: true_order_rank(row["scores"], row["ranks"]), axis=1
 )
 
-# 保存
 df_score_ranks.to_csv("artifacts/merged_scores_ranks_base.csv", index=False)
-
-# df_score_ranksを行でループ
 total_benefit = 0.0
 total_submit = 0.0
 
 for n in range(1, 6):
-    # ★ 各 n でリセット
     total_submit = 0.0
     total_benefit = 0.0
 
@@ -965,7 +803,6 @@ for n in range(1, 6):
         true_rank = row.get("true_order_rank", None)
 
         if true_rank is not None and true_rank <= n:
-            # ★ 欠損オッズは0扱い
             if pd.isna(odds):
                 odds = 0.0
             total_benefit += float(odds) * 100
@@ -978,7 +815,7 @@ for n in range(1, 6):
 
 
 
-# In[ ]:
+# In[151]:
 
 
 def top1_accuracy(scores: torch.Tensor, ranks: torch.Tensor) -> float:
@@ -1219,7 +1056,7 @@ with open(metrics_path, "a", newline="") as f:
 print(f"[saved] {metrics_path}")
 
 
-# In[ ]:
+# In[152]:
 
 
 # === 条件別ヒット率/ROI 分析（修正版） =========================
@@ -1489,7 +1326,7 @@ else:
     print("[cond] ROI 集計が空のため、best ROI CSV の出力はスキップしました。")
 
 
-# In[ ]:
+# In[153]:
 
 
 # prediction
@@ -1606,7 +1443,7 @@ tri_df = tri_df.merge(
 tri_df.to_csv("artifacts/pred_trifecta_topk.csv", index=False)
 
 
-# In[ ]:
+# In[154]:
 
 
 # connのクローズ

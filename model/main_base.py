@@ -4,6 +4,30 @@
 # In[ ]:
 
 
+
+
+
+# In[ ]:
+
+
+
+
+
+
+
+# In[ ]:
+
+
+
+
+
+
+
+
+
+# In[ ]:
+
+
 import os
 import pandas as pd
 import psycopg2
@@ -107,13 +131,13 @@ DB_CONF = {
     "password": os.getenv("PGPASSWORD", "secret"),
 }
 
-conn = psycopg2.connect(**DB_CONF)
-result_df = pd.read_sql(f"""
-    SELECT * FROM feat.train_features_base
-    WHERE race_date <= '2024-12-31'
-    AND venue = '{venue}'
-""", conn)
-
+# Use short‑lived connection to avoid leaks
+with psycopg2.connect(**DB_CONF) as conn:
+    result_df = pd.read_sql(f"""
+        SELECT * FROM feat.train_features_base
+        WHERE race_date <= '2024-12-31'
+        AND venue = '{venue}'
+    """, conn)
 
 print(f"Loaded {len(result_df)} rows from the database.")
 
@@ -537,7 +561,8 @@ query = f"""
     WHERE race_date BETWEEN '{start_date}' AND '{today}'
     AND venue = '{venue}'
 """
-df_recent = pd.read_sql(query, conn)
+with psycopg2.connect(**DB_CONF) as conn:
+    df_recent = pd.read_sql(query, conn)
 print(df_recent)
 
 df_recent.drop(columns=exclude, inplace=True, errors="ignore")
@@ -1088,13 +1113,33 @@ _base["trifecta_odds"] = pd.to_numeric(_base["trifecta_odds"], errors="coerce")
 
 # df_recent から環境や会場などの列をマージ（存在する列だけ）
 _cand_cols = [
-    "race_key", "venue", "air_temp", "water_temp",
+    "race_key", "race_date", "venue", "air_temp", "water_temp",
     "wind_speed", "wave_height", "wind_dir_deg", "wind_sin", "wind_cos",
 ]
 _exist_cols = [c for c in _cand_cols if c in df_recent.columns]
 if _exist_cols:
     _env = df_recent[_exist_cols].drop_duplicates("race_key")
     _base = _base.merge(_env, on="race_key", how="left")
+
+# _df_eval_proc 側に race_date があれば補完
+if "race_date" not in _base.columns and "race_date" in _df_eval_proc.columns:
+    _base = _base.merge(
+        _df_eval_proc[["race_key", "race_date"]].drop_duplicates("race_key"),
+        on="race_key", how="left"
+    )
+
+# 日付を date 型へ
+if "race_date" in _base.columns:
+    _base["race_date"] = pd.to_datetime(_base["race_date"]).dt.date
+
+# --- trifecta_odds を 100円あたりの『倍率』に正規化（円建てなら /100） ---
+if _base["trifecta_odds"].notna().any():
+    try:
+        q95 = _base["trifecta_odds"].quantile(0.95)
+        if q95 > 300:  # 円建ての可能性が高い
+            _base["trifecta_odds"] = _base["trifecta_odds"] / 100.0
+    except Exception:
+        pass
 
 # 1) 予測スコア由来の「自信度」特徴を付与（PLのtop1確率・top2とのギャップ等）
 try:
@@ -1326,7 +1371,217 @@ if not _cond_result.empty:
         pd.concat(_dfs, ignore_index=True).to_csv(_path2, index=False)
         print(f"[cond] Best-ROI matches (per top_n) saved to {_path2}")
 else:
+#     print("[cond] ROI 集計が空のため、best ROI CSV の出力はスキップしました。")
     print("[cond] ROI 集計が空のため、best ROI CSV の出力はスキップしました。")
+
+# === 期待ROI（将来利用前提）ウォークフォワード評価 ======================
+# 目的: 過去で条件選定 → 未来で検証、を時系列で繰り返し、前向きの期待ROIを推定
+# 出力: artifacts/cond_expected_roi_walkforward.csv, artifacts/cond_expected_roi_summary.csv
+print("[cond] ウォークフォワードで期待ROIを評価します…")
+
+if "race_date" in _base.columns and not _base.empty:
+    import math
+
+    def _qcut_edges(series: pd.Series, q: int):
+        try:
+            _, bins = pd.qcut(series.dropna(), q=q, duplicates="drop", retbins=True)
+            return bins
+        except Exception:
+            return None
+
+    def _apply_bins(series: pd.Series, bins):
+        if bins is None or len(bins) < 2:
+            return pd.Series([pd.NA] * len(series), index=series.index)
+        return pd.cut(series, bins=bins, include_lowest=True)
+
+    def _summarize_on(df: pd.DataFrame, col: str, top_n: int, min_races: int = 30) -> pd.DataFrame:
+        if col not in df.columns:
+            return pd.DataFrame()
+        g = df.dropna(subset=[col, "true_order_rank", "trifecta_odds", "race_key"]).copy()
+        if g.empty:
+            return pd.DataFrame()
+        def _agg(x):
+            rep = x.drop_duplicates("race_key")
+            n_races = rep["race_key"].nunique()
+            hits = rep["true_order_rank"] <= top_n
+            total_return = float(rep.loc[hits, "trifecta_odds"].sum())
+            cost = n_races * top_n
+            roi = (total_return - cost) / cost if cost > 0 else math.nan
+            return pd.Series({
+                "n_races": int(n_races),
+                "n_hits": int(hits.sum()),
+                "total_return": total_return,
+                "total_cost": float(cost),
+                "hit_rate": float(hits.mean()),
+                "roi": roi,
+            })
+        out = g.groupby(col, dropna=False).apply(_agg).reset_index().rename(columns={col: "bin"})
+        out["top_n"] = int(top_n)
+        out["condition"] = col
+        return out[out["n_races"] >= min_races]
+
+    def _apply_choice(df_te: pd.DataFrame, row: pd.Series) -> pd.Series:
+        col, binv, topn = row["condition"], row["bin"], int(row["top_n"])
+        sel = df_te.drop_duplicates("race_key").copy()
+        try:
+            mask = sel[col] == binv
+        except Exception:
+            mask = sel[col].astype(str) == str(binv)
+        rep = sel.loc[mask]
+        if rep.empty:
+            return pd.Series({
+                "n_races": 0, "n_hits": 0, "total_return": 0.0,
+                "total_cost": 0.0, "hit_rate": math.nan, "roi": math.nan
+            })
+        hits = rep["true_order_rank"] <= topn
+        n = int(rep["race_key"].nunique())
+        total_return = float(rep.loc[hits, "trifecta_odds"].sum())
+        cost = float(n * topn)
+        roi = (total_return - cost) / cost if cost > 0 else math.nan
+        return pd.Series({
+            "n_races": n, "n_hits": int(hits.sum()), "total_return": total_return,
+            "total_cost": cost, "hit_rate": float(hits.mean()), "roi": roi
+        })
+
+    # ウィンドウ設定（必要に応じて調整可）
+    TUNE_DAYS = 120  # 条件選定に使う過去日数
+    TEST_DAYS = 30   # その直後の検証日数
+
+    df_all = _base.dropna(subset=["race_key", "race_date"]).copy()
+    df_all.sort_values("race_date", inplace=True)
+
+    # --- sanity check: trifecta_odds should already be in "x倍" (not yen) ---
+    if "trifecta_odds" in df_all.columns and df_all["trifecta_odds"].notna().any():
+        q95 = df_all["trifecta_odds"].quantile(0.95)
+        assert q95 < 300, "trifecta_odds は倍率（x倍）に正規化されている必要があります"
+
+    # 解析対象列（意思決定用の条件のみ）
+    cols_to_try = ["pl_prob_bin", "gap_bin", "wind_bin", "wave_bin", "tailwind"]
+    if "venue" in df_all.columns:
+        cols_to_try.append("venue")
+
+    records = []
+    start_cursor = df_all["race_date"].min() + dt.timedelta(days=TUNE_DAYS)
+    end_limit = df_all["race_date"].max()
+
+    cursor = start_cursor
+    while cursor <= end_limit:
+        tune_start = cursor - dt.timedelta(days=TUNE_DAYS)
+        tune_end   = cursor - dt.timedelta(days=1)
+        test_end   = min(cursor + dt.timedelta(days=TEST_DAYS - 1), end_limit)
+
+        df_tr = df_all[(df_all["race_date"] >= tune_start) & (df_all["race_date"] <= tune_end)].copy()
+        df_te = df_all[(df_all["race_date"] >= cursor) & (df_all["race_date"] <= test_end)].copy()
+
+        n_tr = df_tr["race_key"].nunique()
+        n_te = df_te["race_key"].nunique()
+        if n_tr < 50 or n_te < 10:
+            cursor = cursor + dt.timedelta(days=TEST_DAYS)
+            continue
+
+        # --- tune 側でビン境界を決めて、test 側に適用 ---
+        bins_prob = _qcut_edges(df_tr["pl_top1_prob"], 4) if "pl_top1_prob" in df_tr.columns else None
+        bins_gap  = _qcut_edges(df_tr["pl_gap"], 4) if "pl_gap" in df_tr.columns else None
+
+        if "pl_top1_prob" in df_tr.columns:
+            df_tr["pl_prob_bin"] = _apply_bins(df_tr["pl_top1_prob"], bins_prob)
+            df_te["pl_prob_bin"] = _apply_bins(df_te["pl_top1_prob"], bins_prob)
+        if "pl_gap" in df_tr.columns:
+            df_tr["gap_bin"] = _apply_bins(df_tr["pl_gap"], bins_gap)
+            df_te["gap_bin"] = _apply_bins(df_te["pl_gap"], bins_gap)
+        if "wind_speed" in df_tr.columns:
+            BWS = [-np.inf, 2, 4, 6, 8, np.inf]
+            df_tr["wind_bin"] = pd.cut(df_tr["wind_speed"], bins=BWS, right=False)
+            df_te["wind_bin"] = pd.cut(df_te["wind_speed"], bins=BWS, right=False)
+        if "wave_height" in df_tr.columns:
+            BWH = [-np.inf, 0.5, 1.0, 2.0, np.inf]
+            df_tr["wave_bin"] = pd.cut(df_tr["wave_height"], bins=BWH, right=False)
+            df_te["wave_bin"] = pd.cut(df_te["wave_height"], bins=BWH, right=False)
+        if "wind_sin" in df_tr.columns:
+            df_tr["tailwind"] = df_tr["wind_sin"] < 0
+            df_te["tailwind"] = df_te["wind_sin"] < 0
+
+        # --- 選定（tune） ---
+        tune_tbl = pd.concat([
+            _summarize_on(df_tr, c, n, 30 if c != "venue" else 50)
+            for n in [1, 2, 3, 4, 5] for c in cols_to_try
+        ], ignore_index=True)
+        if tune_tbl.empty:
+            cursor = cursor + dt.timedelta(days=TEST_DAYS)
+            continue
+
+        # --- Robust selection on tune side ---
+        # (a) drop degenerate conditions that only have a single bin in this window
+        _bin_counts = tune_tbl.groupby(["top_n", "condition"])["bin"].nunique().reset_index(name="n_bins")
+        tune_tbl = tune_tbl.merge(_bin_counts, on=["top_n", "condition"], how="left")
+        tune_tbl = tune_tbl[tune_tbl["n_bins"] > 1].copy()
+
+        # (b) remove NaN/inf ROI rows
+        tune_tbl = tune_tbl.dropna(subset=["roi"]).copy()
+        tune_tbl = tune_tbl[np.isfinite(tune_tbl["roi"])]
+
+        # (c) enforce a minimum number of hits to avoid overfitting tiny samples
+        MIN_HITS = 3
+        if "n_hits" in tune_tbl.columns:
+            tune_tbl = tune_tbl[tune_tbl["n_hits"] >= MIN_HITS]
+
+        if tune_tbl.empty:
+            cursor = cursor + dt.timedelta(days=TEST_DAYS)
+            continue
+
+        # (d) tie-break: ROI desc → n_races desc → hit_rate desc
+        tune_tbl = tune_tbl.sort_values(["roi", "n_races", "hit_rate"],
+                                        ascending=[False, False, False])
+
+        best_by_topn = tune_tbl.groupby("top_n", as_index=False).head(1)
+
+        # --- 検証（test） ---
+        for _, r in best_by_topn.iterrows():
+            applied = _apply_choice(df_te, r)
+            rec = {
+                "tune_start": str(tune_start), "tune_end": str(tune_end),
+                "test_start": str(cursor), "test_end": str(test_end),
+                "condition": r["condition"], "bin": r["bin"], "top_n": int(r["top_n"]),
+                "bin_label": str(r["bin"]),
+                **applied.to_dict(),
+            }
+            # add interval bounds if the bin is an Interval
+            if isinstance(r["bin"], pd.Interval):
+                rec["bin_low"] = float(r["bin"].left)
+                rec["bin_high"] = float(r["bin"].right)
+            records.append(rec)
+
+        cursor = cursor + dt.timedelta(days=TEST_DAYS)
+
+    wf_path = "artifacts/cond_expected_roi_walkforward.csv"
+    wf_df = pd.DataFrame.from_records(records)
+    wf_df.to_csv(wf_path, index=False)
+    print(f"[cond] Walk‑forward records saved to {wf_path} (rows={len(wf_df)})")
+
+    # 集約（top_n ごとに前向きROIを一本化）
+    if not wf_df.empty:
+        summary = []
+        for n in sorted(wf_df["top_n"].unique()):
+            sub = wf_df[wf_df["top_n"] == n]
+            cost = float(sub["total_cost"].sum())
+            ret  = float(sub["total_return"].sum())
+            n_r  = int(sub["n_races"].sum())
+            n_h  = int(sub["n_hits"].sum())
+            # ROI is stored as a ratio (e.g., 0.12 = +12%)
+            roi  = (ret - cost) / cost if cost > 0 else math.nan
+            hit_rate = (n_h / n_r) if n_r > 0 else math.nan
+            summary.append({
+                "top_n": int(n), "n_races": n_r, "n_hits": n_h,
+                "expected_roi": roi, "hit_rate": hit_rate,
+                "total_return": ret, "total_cost": cost,
+            })
+        sum_df = pd.DataFrame(summary).sort_values("top_n")
+        sum_path = "artifacts/cond_expected_roi_summary.csv"
+        sum_df.to_csv(sum_path, index=False)
+        print(f"[cond] Expected ROI summary saved to {sum_path}")
+else:
+    print("[cond] race_date が無いためウォークフォワード評価はスキップしました。")
+# ======================================================================
 
 
 # In[ ]:
@@ -1346,8 +1601,8 @@ query = f"""
     WHERE race_date BETWEEN '{start_date}' AND '{today}'
 """
 
-conn = psycopg2.connect(**DB_CONF)
-df_recent = pd.read_sql(query, conn)
+with psycopg2.connect(**DB_CONF) as conn:
+    df_recent = pd.read_sql(query, conn)
 print(df_recent)
 df_recent.to_csv("artifacts/pred_features_recent.csv", index=False)
 
@@ -1449,7 +1704,5 @@ tri_df.to_csv("artifacts/pred_trifecta_topk.csv", index=False)
 # In[ ]:
 
 
-# connのクローズ
-conn.close()
 print("[predict] Prediction completed and saved to artifacts directory.")
 

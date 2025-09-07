@@ -4,30 +4,6 @@
 # In[ ]:
 
 
-
-
-
-# In[ ]:
-
-
-
-
-
-
-
-# In[ ]:
-
-
-
-
-
-
-
-
-
-# In[ ]:
-
-
 import os
 import pandas as pd
 import psycopg2
@@ -446,16 +422,6 @@ log_dir = os.path.join("artifacts", "tb", time.strftime("%Y%m%d-%H%M%S"))
 os.makedirs(log_dir, exist_ok=True)
 writer = SummaryWriter(log_dir=log_dir)
 for epoch in range(EPOCHS):
-    if epoch == 0:                  # 1 エポック目だけ試す例
-        ctx, boats, lane_ids, ranks, st_true, st_mask = next(iter(loader_train))
-        ctx, boats = ctx.to(device), boats.to(device)
-        lane_ids = lane_ids.to(device)
-        st_true, st_mask = st_true.to(device), st_mask.to(device)
-
-        st_pred, scores, win_logits = model(ctx, boats, lane_ids)
-        (st_pred.sum() + scores.sum() + win_logits.sum()).backward()     # ダミー backward
-        grad_norm = sum(p.grad.abs().mean().item() for p in model.parameters())
-        # print(f"[debug] average |grad| = {grad_norm:.3e}")
     # ---- train ----
     model.train(); tr_sum = 0
     grad_sum, grad_steps = 0.0, 0

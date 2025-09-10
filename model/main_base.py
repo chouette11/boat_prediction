@@ -15,19 +15,10 @@
 
 
 
-# In[ ]:
+# In[1]:
 
 
-
-
-
-
-
-
-
-# In[ ]:
-
-
+import sys
 import os
 import pandas as pd
 import psycopg2
@@ -101,27 +92,34 @@ register_feature(FeatureDef("wind_sin", _wind_sin, deps=["wind_dir_deg"]))
 register_feature(FeatureDef("wind_cos", _wind_cos, deps=["wind_dir_deg"]))
 
 
-# In[ ]:
+# In[2]:
 
 
 import nbformat
 from nbconvert import PythonExporter
 
-with open("main_base.ipynb", "r", encoding="utf-8") as f:
-    nb = nbformat.read(f, as_version=4)
+if len(sys.argv[1]) < 4:
+    pass
+else :
+    with open("main_base.ipynb", "r", encoding="utf-8") as f:
+        nb = nbformat.read(f, as_version=4)
 
-exporter = PythonExporter()
-source, _ = exporter.from_notebook_node(nb)
+    exporter = PythonExporter()
+    source, _ = exporter.from_notebook_node(nb)
 
-with open("main_base.py", "w", encoding="utf-8") as f:
-    f.write(source)
+    with open("main_base.py", "w", encoding="utf-8") as f:
+        f.write(source)
 
 
-# In[ ]:
+# In[3]:
 
 
 load_dotenv(override=True)
 venue = '若 松'
+if len(sys.argv[1]) < 4:
+    venue = sys.argv[1]
+print(f"Venue: {venue}")
+os.makedirs(f"artifacts/{venue}", exist_ok=True)
 
 DB_CONF = {
     "host":     os.getenv("PGHOST", "localhost"),
@@ -142,7 +140,7 @@ with psycopg2.connect(**DB_CONF) as conn:
 print(f"Loaded {len(result_df)} rows from the database.")
 
 
-# In[ ]:
+# In[4]:
 
 
 result_df = apply_features(result_df)
@@ -163,8 +161,8 @@ NUM_COLS = BASE_NUM_COLS
 bool_cols = [c for c in result_df.columns if c.endswith("_fs_flag")]
 result_df[bool_cols] = result_df[bool_cols].fillna(False).astype(bool)
 os.makedirs("artifacts", exist_ok=True)
-result_df.to_csv("artifacts/train_features_base.csv", index=False)
-display(result_df.head())
+result_df.to_csv(f"artifacts/train_features_{venue}.csv", index=False)
+print(result_df.head())
 print("データフレーム全体の欠損値の総数:", result_df.isnull().sum().sum())
 
 missing_ratio = result_df.isnull().mean()
@@ -176,7 +174,7 @@ print(missing_ratio_percent.sort_values(ascending=False))
 os.makedirs("artifacts", exist_ok=True)
 
 
-# In[ ]:
+# In[5]:
 
 
 # ---------------- Loss / Regularization Weights -----------------
@@ -191,7 +189,7 @@ TOPK_K = 3
 TOPK_WEIGHTS = [3.0, 2.0, 1.0]
 
 
-# In[ ]:
+# In[6]:
 
 
 def pl_nll(scores: torch.Tensor, ranks: torch.Tensor, reduce: bool = True) -> torch.Tensor:
@@ -261,7 +259,7 @@ print("pl_nll should be ~0 :", pl_nll(scores, ranks).item())
 print("pl_nll_topk (k=3) should be ~0 :", pl_nll_topk(scores, ranks, k=TOPK_K, weights=TOPK_WEIGHTS).item())
 
 
-# In[ ]:
+# In[7]:
 
 
 def choose_val_cutoff(
@@ -329,7 +327,7 @@ model = DualHeadRanker(boat_in=boat_dim).to(device)
 opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=5e-5)
 
 
-# In[ ]:
+# In[8]:
 
 
 def evaluate_model(model, dataset, device):
@@ -437,7 +435,7 @@ def evaluate_model(model, dataset, device):
 #     print("[diag]   ► finished quick diagnostics\n")
 
 
-# In[ ]:
+# In[9]:
 
 
 EPOCHS = 20
@@ -532,7 +530,7 @@ torch.save(model.state_dict(), model_path)
 print(f"Model saved to {model_path}")
 
 
-# In[ ]:
+# In[33]:
 
 
 # ---- Monkey‑patch ROIAnalyzer so it uses BoatRaceDataset2 (MTL) ----------
@@ -566,12 +564,12 @@ with psycopg2.connect(**DB_CONF) as conn:
 print(df_recent)
 
 df_recent.drop(columns=exclude, inplace=True, errors="ignore")
-df_recent.to_csv("artifacts/eval_features_recent_base.csv", index=False)
+df_recent.to_csv(f"artifacts/{venue}/eval_features_recent_{venue}.csv", index=False)
 print(f"[simulate] Loaded {len(df_recent)} rows ({start_date} – {today}).")
 print(f"columns: {', '.join(df_recent.columns)}")
 
 
-# In[ ]:
+# In[34]:
 
 
 class _RankOnly(nn.Module):
@@ -626,7 +624,7 @@ else:
     all_ranks  = torch.cat(all_ranks,  dim=0)   # (N,6)
 
 
-# In[ ]:
+# In[35]:
 
 
 # --------------------------------------------------------------------------
@@ -734,12 +732,12 @@ def run_ablation_groups(
 
 print("▼ Permutation importance (ALL features)")
 all_imp = permute_importance(model, ds_val, device)
-imp_path = "artifacts/perm_importance_all_base.csv"
+imp_path = f"artifacts/{venue}/perm_importance_all_{venue}.csv"
 pd.Series(all_imp).sort_values(ascending=False).to_csv(imp_path)
 print(f"[saved] {imp_path}")
 
 
-# In[ ]:
+# In[36]:
 
 
 df_scores = pd.DataFrame(all_scores.numpy(), columns=[f"lane{i}_score" for i in range(1, 7)])
@@ -817,7 +815,30 @@ df_score_ranks["true_order_rank"] = df_score_ranks.apply(
     lambda row: true_order_rank(row["scores"], row["ranks"]), axis=1
 )
 
-df_score_ranks.to_csv("artifacts/merged_scores_ranks_base.csv", index=False)
+def _order_str_from_scores(scores_list):
+    arr = np.array(scores_list, dtype=float)
+    order = list(np.argsort(-arr))  # インデックス 0..5（スコア降順）
+    return "-".join(str(i+1) for i in order)  # 1始まりの艇番号に変換
+
+def _order_str_from_ranks(ranks_list):
+    arr = np.array(ranks_list, dtype=int)
+    order = [i for i, _ in sorted(enumerate(arr), key=lambda t: t[1])]
+    return "-".join(str(i+1) for i in order)  # 1始まり
+
+def _is_hit_trifecta(pred_scores, true_ranks):
+    pred_top3 = torch.topk(torch.tensor(pred_scores), k=3).indices.tolist()
+    true_top3 = torch.topk(-torch.tensor(true_ranks), k=3).indices.tolist()
+    return pred_top3 == true_top3
+
+# 列追加（CSVにも出る）
+df_score_ranks["pred_order_str"] = df_score_ranks["scores"].apply(_order_str_from_scores)
+df_score_ranks["true_order_str"] = df_score_ranks["ranks"].apply(_order_str_from_ranks)
+df_score_ranks["is_hit_trifecta"] = df_score_ranks.apply(
+    lambda row: _is_hit_trifecta(row["scores"], row["ranks"]), axis=1
+)
+
+
+df_score_ranks.to_csv(f"artifacts/{venue}/merged_scores_ranks_{venue}.csv", index=False)
 total_benefit = 0.0
 total_submit = 0.0
 
@@ -843,7 +864,7 @@ for n in range(1, 6):
 
 
 
-# In[ ]:
+# In[37]:
 
 
 def top1_accuracy(scores: torch.Tensor, ranks: torch.Tensor) -> float:
@@ -1052,8 +1073,8 @@ print(f"  • TopN cover (ordered): N=1 model {model_top1_ord:.3f} vs pop {pop_t
 
 # ---- CSV に追記保存 ----
 import csv, os
-os.makedirs("artifacts", exist_ok=True)
-metrics_path = "artifacts/predict_metrics_recent.csv"
+os.makedirs(f"artifacts/{venue}", exist_ok=True)
+metrics_path = f"artifacts/{venue}/predict_metrics_recent_{venue}.csv"
 write_header = not os.path.exists(metrics_path)
 with open(metrics_path, "a", newline="") as f:
     w = csv.writer(f)
@@ -1084,7 +1105,7 @@ with open(metrics_path, "a", newline="") as f:
 print(f"[saved] {metrics_path}")
 
 
-# In[ ]:
+# In[38]:
 
 
 # === 条件別ヒット率/ROI 分析（修正版） =========================
@@ -1283,8 +1304,8 @@ _cond_result = pd.concat(_tables, ignore_index=True) if _tables else pd.DataFram
 
 # 4) 保存
 os.makedirs("artifacts", exist_ok=True)
-_base.to_csv("artifacts/cond_base_table.csv", index=False)
-_cond_result.to_csv("artifacts/cond_hit_roi.csv", index=False)
+_base.to_csv(f"artifacts/{venue}/cond_base_table_{venue}.csv", index=False)
+_cond_result.to_csv(f"artifacts/{venue}/cond_hit_roi_{venue}.csv", index=False)
 
 # 5) コンソールにハイライト表示
 for _n in [1, 2, 3, 4, 5]:
@@ -1576,15 +1597,119 @@ if "race_date" in _base.columns and not _base.empty:
                 "total_return": ret, "total_cost": cost,
             })
         sum_df = pd.DataFrame(summary).sort_values("top_n")
-        sum_path = "artifacts/cond_expected_roi_summary.csv"
+        sum_path = f"artifacts/{venue}/cond_expected_roi_summary_{venue}.csv"
         sum_df.to_csv(sum_path, index=False)
         print(f"[cond] Expected ROI summary saved to {sum_path}")
+
 else:
     print("[cond] race_date が無いためウォークフォワード評価はスキップしました。")
+
+# === 再現性監査: true_order_prob デシル × ROI/Hit ============================
+# 目的:
+#   ・モデルが「実際に起きた完全順序」に与えていた確率(true_order_prob)でデシル分割し、
+#     TopNごとの ヒット率 / ROI / 払戻シェア を比較。
+#   ・“低確率（運の一撃）偏重で勝っていないか”を可視化して、持続性を監査。
+# 出力:
+#   artifacts/{venue}/audit_true_order_prob_deciles_{venue}.csv
+# --------------------------------------------------------------------------
+print("[audit] true_order_prob のデシル別に ROI/Hit を監査します…")
+try:
+    required_cols = {"race_key", "true_order_prob", "true_order_rank", "trifecta_odds"}
+    if not required_cols.issubset(set(_base.columns)):
+        missing = required_cols - set(_base.columns)
+        print(f"[audit] 必須列が不足のためスキップ: {missing}")
+    else:
+        _df_a = (_base
+                 .dropna(subset=list(required_cols))
+                 .drop_duplicates("race_key")
+                 .copy())
+
+        # 万一、倍率が円建てで混在していたら補正（上で補正済みだが安全策）
+        if _df_a["trifecta_odds"].notna().any():
+            try:
+                if _df_a["trifecta_odds"].quantile(0.95) > 300:
+                    _df_a["trifecta_odds"] = _df_a["trifecta_odds"] / 100.0
+            except Exception:
+                pass
+
+        # デシル作成（0=低確率 … 9=高確率）。重複値で段が崩れる場合は drop を許容
+        _df_a["prob_decile"] = pd.qcut(_df_a["true_order_prob"],
+                                       q=10, labels=False, duplicates="drop")
+
+        # 念のため整数化
+        _df_a["prob_decile"] = pd.to_numeric(_df_a["prob_decile"], errors="coerce")
+
+        def _agg_decile(df_dec: pd.DataFrame, top_n: int) -> pd.DataFrame:
+            df_dec = df_dec.copy()
+            df_dec["hit"] = df_dec["true_order_rank"] <= top_n
+            # レース単位に揃える（重複保護）
+            df_dec = df_dec.drop_duplicates("race_key")
+            g = df_dec.groupby("prob_decile", dropna=False)
+            rows = []
+            for k, sub in g:
+                n = int(sub["race_key"].nunique())
+                n_hits = int(sub["hit"].sum())
+                ret = float(sub.loc[sub["hit"], "trifecta_odds"].sum())
+                cost = float(n * top_n)
+                roi = (ret - cost) / cost if cost > 0 else float("nan")
+                rows.append({
+                    "top_n": int(top_n),
+                    "prob_decile": (int(k) if pd.notna(k) else -1),
+                    "n_races": n,
+                    "n_hits": n_hits,
+                    "hit_rate": (n_hits / n) if n > 0 else float("nan"),
+                    "avg_true_order_prob": float(sub["true_order_prob"].mean()) if n > 0 else float("nan"),
+                    "median_true_order_prob": float(sub["true_order_prob"].median()) if n > 0 else float("nan"),
+                    "total_return": ret,
+                    "total_cost": cost,
+                    "roi": roi,
+                })
+            return pd.DataFrame(rows)
+
+        _outs = []
+        for _N in [1, 2, 3, 5]:
+            _outs.append(_agg_decile(_df_a, _N))
+
+        audit_df = pd.concat(_outs, ignore_index=True) if _outs else pd.DataFrame()
+        if not audit_df.empty:
+            # デシル昇順で整列（0=低確率側）
+            audit_df = audit_df.sort_values(["top_n", "prob_decile"]).reset_index(drop=True)
+            # 各 TopN 内で払戻シェアを追加（どのデシルにリターンが偏っているか）
+            def _add_share(g):
+                tot_ret = g["total_return"].sum()
+                g["return_share"] = g["total_return"] / tot_ret if tot_ret > 0 else np.nan
+                tot_hits = g["n_hits"].sum()
+                g["hit_share"] = g["n_hits"] / tot_hits if tot_hits > 0 else np.nan
+                return g
+            audit_df = audit_df.groupby("top_n", as_index=False).apply(_add_share).reset_index(drop=True)
+
+            # 保存
+            os.makedirs(f"artifacts/{venue}", exist_ok=True)
+            audit_path = f"artifacts/{venue}/audit_true_order_prob_deciles_{venue}.csv"
+            audit_df.to_csv(audit_path, index=False)
+            print(f"[audit] Saved decile audit → {audit_path}  (rows={len(audit_df)})")
+
+            # コンソール要約（各TopNで 低確率デシル vs 高確率デシル をダイジェスト）
+            with pd.option_context("display.max_rows", 50, "display.max_colwidth", 80, "display.float_format", "{:.4f}".format):
+                for _N in sorted(audit_df["top_n"].unique()):
+                    view = audit_df[audit_df["top_n"] == _N].sort_values("prob_decile")
+                    if view.empty: 
+                        continue
+                    lo = view.iloc[0]
+                    hi = view.iloc[-1]
+                    print(f"[audit] TopN={_N}  D_low (decile={int(lo['prob_decile'])}) vs D_high (decile={int(hi['prob_decile'])})")
+                    print(f"        n_races {int(lo['n_races'])}/{int(hi['n_races'])}  "
+                          f"hit_rate {lo['hit_rate']:.4f}/{hi['hit_rate']:.4f}  "
+                          f"roi {lo['roi']:.4f}/{hi['roi']:.4f}  "
+                          f"return_share {lo['return_share']:.3f}/{hi['return_share']:.3f}")
+        else:
+            print("[audit] デシル監査の結果が空でした（データ不足）。")
+except Exception as e:
+    print("[audit] 監査処理で例外が発生しました:", e)
 # ======================================================================
 
 
-# In[ ]:
+# In[41]:
 
 
 # prediction
@@ -1625,15 +1750,11 @@ predictor = ROIPredictor(model=rank_model, scaler=scaler,
 pred_scores_df = predictor.predict_scores(df_recent,
                                           include_meta=True,
                                           save_to="artifacts/pred_scores.csv")
-display(pred_scores_df.head())
-
 
 # (2) 勝率＆フェアオッズを保存
 pred_probs_df = predictor.predict_win_probs(scores_df=pred_scores_df,
                                             include_meta=True,
                                             save_to="artifacts/pred_win_probs.csv")
-display(pred_probs_df.head())
-
 # (3) 馬単/三連単の TOP‑K（PL 方式）を保存
 exa_df, tri_df = predictor.predict_exotics_topk(scores_df=pred_scores_df,
                                                 K=10,
@@ -1701,7 +1822,7 @@ tri_df = tri_df.merge(
 tri_df.to_csv("artifacts/pred_trifecta_topk.csv", index=False)
 
 
-# In[ ]:
+# In[40]:
 
 
 print("[predict] Prediction completed and saved to artifacts directory.")

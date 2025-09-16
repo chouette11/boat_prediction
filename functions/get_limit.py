@@ -1,10 +1,11 @@
 from pathlib import Path
+import download_pred
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, parse_qs
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import json, re
 
-def extract_closing_times(html_path: str):
+def extract_closing_times():
     """
     PC版 'レース一覧' ページのHTMLから
     各Rの締切予定時刻・rno・jcd・hd を抽出する。
@@ -17,7 +18,10 @@ def extract_closing_times(html_path: str):
       - hd: 開催日(YYYYMMDD)
       - href: 行のレース詳細リンク（相対）
     """
-    html = Path(html_path).read_text(encoding="utf-8")
+    # 日本標準時
+    today = datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d")
+    html = download_pred.download_off_pred(today, kind="raceindex")
+    print(f'html {html[100:300]}...')  # 先頭300文字を表示
     soup = BeautifulSoup(html, "html.parser")
 
     results = []

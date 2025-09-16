@@ -40,6 +40,7 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS feat.filtered_course AS
 SELECT
     b.racer_id AS reg_no,
     b.course,
+    cr.stadium AS stadium,
     COUNT(*) AS starts,
     SUM(CASE WHEN r.rank = 1 THEN 1 ELSE 0 END) AS firsts,
     SUM(CASE WHEN r.rank = 1 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*),0) AS first_rate,
@@ -48,13 +49,12 @@ SELECT
 FROM core.boat_info b
 JOIN core.results r ON b.race_key = r.race_key AND b.lane = r.lane
 JOIN core.races cr ON b.race_key = cr.race_key
-WHERE cr.stadium = '若 松'
-GROUP BY b.racer_id, b.course
+GROUP BY b.racer_id, b.course, cr.stadium
 WITH NO DATA;
 
 -- Index to speed joins & filters on filtered_course (after MV exists)
-CREATE INDEX IF NOT EXISTS idx_feat_filtered_course_reg_course
-  ON feat.filtered_course (reg_no, course);
+CREATE INDEX IF NOT EXISTS idx_feat_filtered_course_reg_course_stadium
+  ON feat.filtered_course (reg_no, course, stadium);
 
 /* ---------- 学習用特徴量（feat.train_features） ---------- */
 CREATE MATERIALIZED VIEW IF NOT EXISTS feat.train_features2 AS
@@ -137,17 +137,17 @@ HAVING COUNT(DISTINCT race_date)=1
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS feat.tf2_lane_stats AS
 WITH tf2_long AS (
-  SELECT race_key, 1 AS lane_no, lane1_racer_id AS reg_no, lane1_course AS course FROM feat.train_features2
+  SELECT tf.race_key, 1 AS lane_no, tf.lane1_racer_id AS reg_no, tf.lane1_course AS course, tf.venue AS venue FROM feat.train_features2 tf
   UNION ALL
-  SELECT race_key, 2, lane2_racer_id, lane2_course FROM feat.train_features2
+  SELECT tf.race_key, 2, tf.lane2_racer_id, tf.lane2_course, tf.venue FROM feat.train_features2 tf
   UNION ALL
-  SELECT race_key, 3, lane3_racer_id, lane3_course FROM feat.train_features2
+  SELECT tf.race_key, 3, tf.lane3_racer_id, tf.lane3_course, tf.venue FROM feat.train_features2 tf
   UNION ALL
-  SELECT race_key, 4, lane4_racer_id, lane4_course FROM feat.train_features2
+  SELECT tf.race_key, 4, tf.lane4_racer_id, tf.lane4_course, tf.venue FROM feat.train_features2 tf
   UNION ALL
-  SELECT race_key, 5, lane5_racer_id, lane5_course FROM feat.train_features2
+  SELECT tf.race_key, 5, tf.lane5_racer_id, tf.lane5_course, tf.venue FROM feat.train_features2 tf
   UNION ALL
-  SELECT race_key, 6, lane6_racer_id, lane6_course FROM feat.train_features2
+  SELECT tf.race_key, 6, tf.lane6_racer_id, tf.lane6_course, tf.venue FROM feat.train_features2 tf
 )
 SELECT
     l.race_key,
@@ -185,6 +185,7 @@ FROM tf2_long l
 LEFT JOIN feat.filtered_course fc
   ON fc.reg_no = l.reg_no
  AND fc.course = l.course
+ AND fc.stadium = l.venue
 GROUP BY l.race_key
 WITH NO DATA;
 
@@ -200,7 +201,7 @@ SELECT
     ls.lane6_starts, ls.lane6_firsts, ls.lane6_first_rate, ls.lane6_two_rate, ls.lane6_three_rate
 FROM feat.train_features2 tf
 LEFT JOIN feat.tf2_lane_stats             ls    USING (race_key)
-WHERE tf.venue = '若 松'
+-- (no per-venue filter; filter by venue at query time if needed)
 WITH NO DATA;
 
 -- /* ---------- 評価用特徴量（feat.eval_features） ---------- */
@@ -255,7 +256,7 @@ ANALYZE feat.tf2_lane_stats;
 REFRESH MATERIALIZED VIEW feat.train_features_base;
 -- Prepare for concurrent refreshes in future runs
 CREATE UNIQUE INDEX IF NOT EXISTS idx_base_race_key ON feat.train_features_base (race_key);
-\echo '--- eval_features3 層のマテリアライズドビューを更新中 ---'
+\echo '--- eval_features_base 層のマテリアライズドビューを更新中 ---'
 REFRESH MATERIALIZED VIEW feat.eval_features_base;
 
 /* ---------- データ存在チェック ---------- */

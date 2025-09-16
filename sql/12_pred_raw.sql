@@ -28,8 +28,9 @@ CREATE TABLE IF NOT EXISTS raw.weather_staging_off (
     source_file        TEXT
 );
 
+DROP TABLE IF EXISTS raw.beforeinfo_off CASCADE;
 CREATE TABLE IF NOT EXISTS raw.beforeinfo_off (
-    stadium        TEXT NOT NULL DEFAULT '若松',
+    stadium        TEXT NOT NULL DEFAULT '若 松',
     race_date      DATE NOT NULL,
     race_no        INT  NOT NULL,
     lane           INT  NOT NULL,
@@ -42,8 +43,9 @@ CREATE TABLE IF NOT EXISTS raw.beforeinfo_off (
     course         INT
 );
 
+DROP TABLE IF EXISTS raw.weather_off CASCADE;
 CREATE TABLE IF NOT EXISTS raw.weather_off (
-    stadium            TEXT NOT NULL DEFAULT '若松',
+    stadium            TEXT NOT NULL DEFAULT '若 松',
     race_date          DATE NOT NULL,
     race_no            INT  NOT NULL,
     obs_time_label     TEXT,

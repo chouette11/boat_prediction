@@ -10,10 +10,11 @@
 -- =========================================================
 -- ボート・選手情報（通常 VIEW） ------------------------------
 -- ボート・選手情報（予測用：beforeinfoのみ）
+DROP VIEW IF EXISTS core.pred_boat_info CASCADE;
 CREATE OR REPLACE VIEW core.pred_boat_info AS
 WITH b AS (
   SELECT *,
-         core.f_race_key(race_date, race_no, stadium) AS race_key
+         core.f_race_key(race_date::date, race_no::int, core.f_official_venue_no(stadium)) AS race_key
   FROM raw.beforeinfo_off
 )
 SELECT DISTINCT ON (b.race_key, b.lane)
@@ -40,9 +41,10 @@ FROM b
 ORDER BY b.race_key, b.lane, b.course;
 
 -- 天候 ------------------------------------------------------
+DROP MATERIALIZED VIEW IF EXISTS core.pred_weather CASCADE;
 CREATE MATERIALIZED VIEW IF NOT EXISTS core.pred_weather AS
 SELECT DISTINCT ON (race_key)
-       core.f_race_key(race_date, race_no, stadium) AS race_key,
+       core.f_race_key(race_date::date, race_no::int, core.f_official_venue_no(stadium)) AS race_key,
        NULLIF(regexp_replace(air_temp_raw   ,'[^0-9.]','','g'), '')::NUMERIC AS air_temp,
        NULLIF(regexp_replace(wind_speed_raw ,'[^0-9.]','','g'), '')::NUMERIC AS wind_speed,
        CASE wind_dir_raw
@@ -72,12 +74,12 @@ ORDER BY race_key, obs_time_label DESC;
 
 -- レースキー→日付/会場マップ（予測用）
 CREATE MATERIALIZED VIEW IF NOT EXISTS core.pred_races AS
-SELECT DISTINCT ON (core.f_race_key(race_date, race_no, stadium))
-       core.f_race_key(race_date, race_no, stadium) AS race_key,
+SELECT DISTINCT ON (core.f_race_key(race_date::date, race_no::int, core.f_official_venue_no(stadium)))
+       core.f_race_key(race_date::date, race_no::int, core.f_official_venue_no(stadium)) AS race_key,
        race_date,
        stadium AS venue
 FROM raw.beforeinfo_off
-ORDER BY core.f_race_key(race_date, race_no, stadium), race_date DESC;
+ORDER BY core.f_race_key(race_date::date, race_no::int, core.f_official_venue_no(stadium)), race_date DESC;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_core_pred_races_race_key
   ON core.pred_races (race_key);

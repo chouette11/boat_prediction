@@ -30,7 +30,7 @@ INSERT INTO raw.beforeinfo_off (
     exh_time, tilt_deg, st_time_raw, course
 )
 SELECT
-    '若松',
+    '若 松',
     to_date(yyyymmdd, 'YYYYMMDD'),
     race_no_ex::int,
     lane,
@@ -73,7 +73,7 @@ INSERT INTO raw.weather_off (
     water_temp_raw, wave_height_raw
 )
 SELECT
-    '若松',
+    '若 松',
     to_date(yyyymmdd, 'YYYYMMDD'),
     race_no_ex::int,
     obs_datetime_label, weather,

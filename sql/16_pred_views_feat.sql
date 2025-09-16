@@ -15,6 +15,8 @@ SET parallel_leader_participation = on;
 -- Indexes to speed joins on filtered_course
 CREATE INDEX IF NOT EXISTS idx_feat_filtered_course_reg_course
   ON feat.filtered_course (reg_no, course);
+CREATE INDEX IF NOT EXISTS idx_feat_filtered_course_reg_course_stadium
+  ON feat.filtered_course (reg_no, course, stadium);
 
 /* ---------- 予測用：ボート＋天候のフラットビュー ---------- */
 CREATE MATERIALIZED VIEW IF NOT EXISTS pred.boat_flat AS
@@ -51,13 +53,14 @@ DROP MATERIALIZED VIEW IF EXISTS pred.features CASCADE;
 /* ---------- 学習用特徴量（pred.features） ---------- */
 CREATE MATERIALIZED VIEW IF NOT EXISTS pred.features AS
 WITH flat AS (
-    SELECT bf.*, pr.race_date
+    SELECT bf.*, pr.race_date, pr.venue
     FROM pred.boat_flat bf
     JOIN core.pred_races pr USING (race_key)
 )
 SELECT
     race_key,
     MAX(race_date)   AS race_date,
+    MAX(venue)       AS venue,
     MAX(air_temp)    AS air_temp,
     MAX(wind_speed)  AS wind_speed,
     MAX(wave_height) AS wave_height,
@@ -125,17 +128,17 @@ DROP MATERIALIZED VIEW IF EXISTS pred.tf2_lane_stats;
 /* ---------- コース別レーン統計（pred.tf2_lane_stats） ---------- */
 CREATE MATERIALIZED VIEW IF NOT EXISTS pred.tf2_lane_stats AS
 WITH tf2_long AS (
-  SELECT race_key, 1 AS lane_no, lane1_racer_id AS reg_no, lane1_bf_course AS course FROM pred.features
+  SELECT race_key, 1 AS lane_no, lane1_racer_id AS reg_no, lane1_bf_course AS course, venue AS venue FROM pred.features
   UNION ALL
-  SELECT race_key, 2, lane2_racer_id, lane2_bf_course FROM pred.features
+  SELECT race_key, 2, lane2_racer_id, lane2_bf_course, venue FROM pred.features
   UNION ALL
-  SELECT race_key, 3, lane3_racer_id, lane3_bf_course FROM pred.features
+  SELECT race_key, 3, lane3_racer_id, lane3_bf_course, venue FROM pred.features
   UNION ALL
-  SELECT race_key, 4, lane4_racer_id, lane4_bf_course FROM pred.features
+  SELECT race_key, 4, lane4_racer_id, lane4_bf_course, venue FROM pred.features
   UNION ALL
-  SELECT race_key, 5, lane5_racer_id, lane5_bf_course FROM pred.features
+  SELECT race_key, 5, lane5_racer_id, lane5_bf_course, venue FROM pred.features
   UNION ALL
-  SELECT race_key, 6, lane6_racer_id, lane6_bf_course FROM pred.features
+  SELECT race_key, 6, lane6_racer_id, lane6_bf_course, venue FROM pred.features
 )
 SELECT
     l.race_key,
@@ -173,6 +176,7 @@ FROM tf2_long l
 LEFT JOIN feat.filtered_course fc
   ON fc.reg_no = l.reg_no
  AND fc.course = l.course
+ AND fc.stadium = l.venue
 GROUP BY l.race_key
 WITH NO DATA;
 

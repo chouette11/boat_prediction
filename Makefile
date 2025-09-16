@@ -57,19 +57,22 @@ initalldb:
 	# ② データベースを作成
 	make db_create
 	# ③ スキーマを初期化
-	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql2/01_schema.sql
+	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql/01_schema.sql
+
+	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql/02_boat_programs_raw.sql
+	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql/02_boat_results_raw.sql
 
 	# ④ データを流し込む
-	python sql2/parse_programs.py
-	python sql2/parse_results.py
+	python sql/parse_programs.py
+	python sql/parse_results.py
 
 	# ⑥ ビューを作成
-	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql2/05_views_core.sql
+	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql/05_views_core.sql
 
 	# ⑦ 特徴量を作成
-	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql2/06_views_feat.sql
+	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql/06_views_feat.sql
 
-	python sql2/confirm.py
+	python sql/confirm.py
 
 .PHONY: rebuild_alldb
 rebuild_alldb:
@@ -87,18 +90,18 @@ rebuild_alldb:
 .PHONY: alldb_pred
 alldb_pred:
 # 	# schema作成
-# 	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql2/11_pred_schema.sql
-# 	# rawを作成
-# 	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql2/12_pred_raw.sql
+	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql/11_pred_schema.sql
+	# rawを作成
+	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql/12_pred_raw.sql
 	python pred.py
 	# 流し込む
-	python sql2/etl_pred.py
+	python sql/etl_pred.py
 	# マージ
-	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql2/13_pred_merge_staging.sql
+	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql/13_pred_merge_staging.sql
 	# 05_views_core
-	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql2/15_pred_views_core.sql
+	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql/15_pred_views_core.sql
 	# 06_views_feat
-	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql2/16_pred_views_feat.sql
+	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql/16_pred_views_feat.sql
 
 .PHONY: db_list
 db_list:
@@ -127,3 +130,13 @@ session:
 .PHONY: delete_session
 delete_session:
 	python sql/session_delete.py
+
+.PHONY: run_venue_all
+run_venue_all:
+	for venue in '桐 生' '戸 田' '江戸川' '平和島' '多摩川' \
+	         '浜名湖' '蒲 郡' '常 滑' '津' '三 国' \
+	         'びわこ' '住之江' '尼 崎' '鳴 門' '丸 亀' \
+	         '児 島' '宮 島' '徳 山' '下 関' '若 松' \
+	         '芦 屋' '福 岡' '唐 津' '大 村'; do \
+	  python model/main_base.py "$$venue"; \
+	done

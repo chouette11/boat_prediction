@@ -7,10 +7,14 @@
         "venv",
         ".git",
         "firebase-debug.log",
-        "firebase-debug.*.log",
-        "*.local"
+        "firebase-debug.*.log"
       ],
-      "runtime": "python313"
+      "runtime": "python311"
     }
-  ]
+  ],
+  "emulators": {
+    "functions": { "port": 5001 },
+    "firestore": { "port": 8080 },
+    "auth": { "port": 9099 }
+  }
 }

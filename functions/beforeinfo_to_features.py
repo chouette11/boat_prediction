@@ -67,22 +67,22 @@ def create_core_pred_weather(weather_df: pd.DataFrame) -> pd.DataFrame:
 
     # wind_dir_rawからwind_dir_degへ変換
     wind_dir_map = {
-        'is-wind1': 0,
-        'is-wind2': 22.5,
-        'is-wind3': 45,
-        'is-wind4': 67.5,
-        'is-wind5': 90,
-        'is-wind6': 112.5,
-        'is-wind7': 135,
-        'is-wind8': 157.5,
-        'is-wind9': 180,
-        'is-wind10': 202.5,
-        'is-wind11': 225,
-        'is-wind12': 247.5,
-        'is-wind13': 270,
-        'is-wind14': 292.5,
-        'is-wind15': 315,
-        'is-wind16': 337.5
+        'is-wind1': 22.5,
+        'is-wind2': 45,
+        'is-wind3': 67.5,
+        'is-wind4': 90,
+        'is-wind5': 112.5,
+        'is-wind6': 135,
+        'is-wind7': 157.5,
+        'is-wind8': 180,
+        'is-wind9': 202.5,
+        'is-wind10': 225,
+        'is-wind11': 247.5,
+        'is-wind12': 270,
+        'is-wind13': 292.5,
+        'is-wind14': 315,
+        'is-wind15': 337.5,
+        'is-wind16': 0
     }
     df['wind_dir_deg'] = df['wind_dir_icon'].map(wind_dir_map)
 
@@ -205,6 +205,9 @@ def rename_columns(df: pd.DataFrame, prefix: str) -> pd.DataFrame:
         **{f'lane{i}_exhibition_time': f'lane{i}_exh_time' for i in range(1, 7)},
     }
     df.rename(columns=prefix, inplace=True)
+    df['air_temp'] = None
+    df['water_temp'] = None
+    df['wave_height'] = df['wave_height'] * 0.01 
     return df
 
 # --- メイン処理 ---

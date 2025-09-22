@@ -202,6 +202,61 @@ WITH NO DATA;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_predf3_race_key ON pred.features_with_record (race_key);
 CREATE INDEX IF NOT EXISTS idx_features_with_record_race_date ON pred.features_with_record (race_date);
 
+DROP MATERIALIZED VIEW IF EXISTS pred.eval_features_with_record CASCADE;
+CREATE MATERIALIZED VIEW IF NOT EXISTS pred.eval_features_with_record AS
+WITH ord AS (
+  SELECT
+    r.race_key,
+    r.lane,
+    r.rank,
+    ROW_NUMBER() OVER (PARTITION BY r.race_key ORDER BY r.rank, r.lane) AS ord
+  FROM core.results r
+  WHERE r.rank IS NOT NULL
+),
+pos AS (
+  SELECT
+    race_key,
+    MIN(lane) FILTER (WHERE ord = 1) AS first_lane,
+    MIN(lane) FILTER (WHERE ord = 2) AS second_lane,
+    MIN(lane) FILTER (WHERE ord = 3) AS third_lane
+  FROM ord
+  GROUP BY race_key
+),
+lanes_rank AS (
+  SELECT
+    race_key,
+    MAX(rank) FILTER (WHERE lane = 1) AS lane1_rank,
+    MAX(rank) FILTER (WHERE lane = 2) AS lane2_rank,
+    MAX(rank) FILTER (WHERE lane = 3) AS lane3_rank,
+    MAX(rank) FILTER (WHERE lane = 4) AS lane4_rank,
+    MAX(rank) FILTER (WHERE lane = 5) AS lane5_rank,
+    MAX(rank) FILTER (WHERE lane = 6) AS lane6_rank
+  FROM core.results
+  GROUP BY race_key
+)
+SELECT
+    pfr.*,
+    pos.first_lane,
+    pos.second_lane,
+    pos.third_lane,
+    lr.lane1_rank,
+    lr.lane2_rank,
+    lr.lane3_rank,
+    lr.lane4_rank,
+    lr.lane5_rank,
+    lr.lane6_rank,
+    (p.payout_yen / 100.0)       AS trifecta_odds,
+    p.popularity_rank            AS trifecta_popularity_rank
+FROM pred.features_with_record pfr
+LEFT JOIN pos USING (race_key)
+LEFT JOIN lanes_rank lr USING (race_key)
+LEFT JOIN core.payout3t p
+  ON p.race_key   = pfr.race_key
+ AND p.first_lane = pos.first_lane
+ AND p.second_lane = pos.second_lane
+ AND p.third_lane  = pos.third_lane
+WITH NO DATA;
+
 /* ---------- REFRESH 文 ---------- */
 \echo '--- boat_flat 層のマテリアライズドビューを更新中 ---'
 REFRESH MATERIALIZED VIEW pred.boat_flat;
@@ -214,6 +269,8 @@ REFRESH MATERIALIZED VIEW pred.features;
 REFRESH MATERIALIZED VIEW pred.tf2_lane_stats;
 \echo '--- features_with_record 層のマテリアライズドビューを更新中 ---'
 REFRESH MATERIALIZED VIEW pred.features_with_record;
+\echo '--- eval_features_with_record 層のマテリアライズドビューを更新中 ---'
+REFRESH MATERIALIZED VIEW pred.eval_features_with_record;
 ANALYZE pred.boat_flat;
 ANALYZE pred.features;
 ANALYZE pred.tf2_lane_stats;

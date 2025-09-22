@@ -15,7 +15,17 @@
 
 
 
-# In[1]:
+# In[ ]:
+
+
+
+
+
+
+
+
+
+# In[2]:
 
 
 import sys
@@ -23,6 +33,7 @@ import os
 import pandas as pd
 import psycopg2
 import numpy as np
+import joblib
 from sklearn.preprocessing import StandardScaler
 import torch
 from torch.utils.data import DataLoader
@@ -92,7 +103,7 @@ register_feature(FeatureDef("wind_sin", _wind_sin, deps=["wind_dir_deg"]))
 register_feature(FeatureDef("wind_cos", _wind_cos, deps=["wind_dir_deg"]))
 
 
-# In[2]:
+# In[3]:
 
 
 import nbformat
@@ -111,7 +122,7 @@ else :
         f.write(source)
 
 
-# In[3]:
+# In[4]:
 
 
 load_dotenv(override=True)
@@ -140,7 +151,7 @@ with psycopg2.connect(**DB_CONF) as conn:
 print(f"Loaded {len(result_df)} rows from the database.")
 
 
-# In[4]:
+# In[5]:
 
 
 result_df = apply_features(result_df)
@@ -174,7 +185,7 @@ print(missing_ratio_percent.sort_values(ascending=False))
 os.makedirs("artifacts", exist_ok=True)
 
 
-# In[5]:
+# In[6]:
 
 
 # ---------------- Loss / Regularization Weights -----------------
@@ -189,7 +200,7 @@ TOPK_K = 3
 TOPK_WEIGHTS = [3.0, 2.0, 1.0]
 
 
-# In[6]:
+# In[7]:
 
 
 def pl_nll(scores: torch.Tensor, ranks: torch.Tensor, reduce: bool = True) -> torch.Tensor:
@@ -259,7 +270,7 @@ print("pl_nll should be ~0 :", pl_nll(scores, ranks).item())
 print("pl_nll_topk (k=3) should be ~0 :", pl_nll_topk(scores, ranks, k=TOPK_K, weights=TOPK_WEIGHTS).item())
 
 
-# In[7]:
+# In[8]:
 
 
 def choose_val_cutoff(
@@ -307,6 +318,10 @@ df_va = result_df[result_df["race_date"] >= cutoff].copy()
 scaler = StandardScaler().fit(df_tr[NUM_COLS])
 df_tr[NUM_COLS] = scaler.transform(df_tr[NUM_COLS])
 df_va[NUM_COLS] = scaler.transform(df_va[NUM_COLS])
+# scalerを保存
+now = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+joblib.dump(scaler, f"artifacts/scalers/scaler_{now}.joblib")
+joblib.dump(scaler, f"../functions/scalers/scaler_{now}.joblib")
 
 mode = "zscore"  
 ds_train = BoatRaceDatasetBase(df_tr)
@@ -327,7 +342,7 @@ model = DualHeadRanker(boat_in=boat_dim).to(device)
 opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=5e-5)
 
 
-# In[8]:
+# In[9]:
 
 
 def evaluate_model(model, dataset, device):
@@ -435,7 +450,7 @@ def evaluate_model(model, dataset, device):
 #     print("[diag]   ► finished quick diagnostics\n")
 
 
-# In[9]:
+# In[10]:
 
 
 EPOCHS = 20
@@ -526,11 +541,13 @@ writer.close()
 now = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
 os.makedirs("artifacts/models", exist_ok=True)
 model_path = f"artifacts/models/model_{now}.pth"
+model_path2 = f"../functions/models/model_{now}.pth"
 torch.save(model.state_dict(), model_path)
+torch.save(model.state_dict(), model_path2)
 print(f"Model saved to {model_path}")
 
 
-# In[33]:
+# In[ ]:
 
 
 # ---- Monkey‑patch ROIAnalyzer so it uses BoatRaceDataset2 (MTL) ----------
@@ -553,6 +570,7 @@ from roi_util import ROIAnalyzer
 
 today = dt.date.today()
 start_date = dt.date(2025, 1, 1)
+end = dt.date(2025, 8, 16)
 
 query = f"""
     SELECT * FROM feat.eval_features_base
@@ -569,7 +587,7 @@ print(f"[simulate] Loaded {len(df_recent)} rows ({start_date} – {today}).")
 print(f"columns: {', '.join(df_recent.columns)}")
 
 
-# In[34]:
+# In[ ]:
 
 
 class _RankOnly(nn.Module):
@@ -624,7 +642,7 @@ else:
     all_ranks  = torch.cat(all_ranks,  dim=0)   # (N,6)
 
 
-# In[35]:
+# In[ ]:
 
 
 # --------------------------------------------------------------------------
@@ -737,7 +755,7 @@ pd.Series(all_imp).sort_values(ascending=False).to_csv(imp_path)
 print(f"[saved] {imp_path}")
 
 
-# In[36]:
+# In[ ]:
 
 
 df_scores = pd.DataFrame(all_scores.numpy(), columns=[f"lane{i}_score" for i in range(1, 7)])
@@ -864,7 +882,7 @@ for n in range(1, 6):
 
 
 
-# In[37]:
+# In[ ]:
 
 
 def top1_accuracy(scores: torch.Tensor, ranks: torch.Tensor) -> float:
@@ -1105,7 +1123,7 @@ with open(metrics_path, "a", newline="") as f:
 print(f"[saved] {metrics_path}")
 
 
-# In[38]:
+# In[ ]:
 
 
 # === 条件別ヒット率/ROI 分析（修正版） =========================
@@ -1124,7 +1142,9 @@ import numpy as np
 import pandas as pd
 import torch
 
+
 print("[cond] 条件別の当たりやすさ分析を開始…")
+# ------------------------------
 
 # 0) ベース表の構築（分析に使う列をまとめる）
 _base = df_score_ranks.copy()
@@ -1154,13 +1174,13 @@ if "race_date" in _base.columns:
     _base["race_date"] = pd.to_datetime(_base["race_date"]).dt.date
 
 # --- trifecta_odds を 100円あたりの『倍率』に正規化（円建てなら /100） ---
-if _base["trifecta_odds"].notna().any():
-    try:
-        q95 = _base["trifecta_odds"].quantile(0.95)
-        if q95 > 300:  # 円建ての可能性が高い
-            _base["trifecta_odds"] = _base["trifecta_odds"] / 100.0
-    except Exception:
-        pass
+# if _base["trifecta_odds"].notna().any():
+#     try:
+#         q95 = _base["trifecta_odds"].quantile(0.95)
+#         if q95 > 300:  # 円建ての可能性が高い
+#             _base["trifecta_odds"] = _base["trifecta_odds"] / 100.0
+#     except Exception:
+#         pass
 
 # 1) 予測スコア由来の「自信度」特徴を付与（PLのtop1確率・top2とのギャップ等）
 try:
@@ -1305,6 +1325,9 @@ _cond_result = pd.concat(_tables, ignore_index=True) if _tables else pd.DataFram
 # 4) 保存
 os.makedirs("artifacts", exist_ok=True)
 _base.to_csv(f"artifacts/{venue}/cond_base_table_{venue}.csv", index=False)
+# is_hit_trifecta が True の行だけに絞る
+_base_hits = _base[_base["is_hit_trifecta"] == True].copy()
+_base_hits.to_csv(f"artifacts/{venue}/cond_base_table_hits_{venue}.csv", index=False)
 _cond_result.to_csv(f"artifacts/{venue}/cond_hit_roi_{venue}.csv", index=False)
 
 # 5) コンソールにハイライト表示
@@ -1471,10 +1494,10 @@ if "race_date" in _base.columns and not _base.empty:
     df_all = _base.dropna(subset=["race_key", "race_date"]).copy()
     df_all.sort_values("race_date", inplace=True)
 
-    # --- sanity check: trifecta_odds should already be in "x倍" (not yen) ---
-    if "trifecta_odds" in df_all.columns and df_all["trifecta_odds"].notna().any():
-        q95 = df_all["trifecta_odds"].quantile(0.95)
-        assert q95 < 300, "trifecta_odds は倍率（x倍）に正規化されている必要があります"
+    # # --- sanity check: trifecta_odds should already be in "x倍" (not yen) ---
+    # if "trifecta_odds" in df_all.columns and df_all["trifecta_odds"].notna().any():
+    #     q95 = df_all["trifecta_odds"].quantile(0.95)
+    #     assert q95 < 300, "trifecta_odds は倍率（x倍）に正規化されている必要があります"
 
     # 解析対象列（意思決定用の条件のみ）
     cols_to_try = ["pl_prob_bin", "gap_bin", "wind_bin", "wave_bin", "tailwind"]
@@ -1625,12 +1648,12 @@ try:
                  .copy())
 
         # 万一、倍率が円建てで混在していたら補正（上で補正済みだが安全策）
-        if _df_a["trifecta_odds"].notna().any():
-            try:
-                if _df_a["trifecta_odds"].quantile(0.95) > 300:
-                    _df_a["trifecta_odds"] = _df_a["trifecta_odds"] / 100.0
-            except Exception:
-                pass
+        # if _df_a["trifecta_odds"].notna().any():
+        #     try:
+        #         if _df_a["trifecta_odds"].quantile(0.95) > 300:
+        #             _df_a["trifecta_odds"] = _df_a["trifecta_odds"] / 100.0
+        #     except Exception:
+        #         pass
 
         # デシル作成（0=低確率 … 9=高確率）。重複値で段が崩れる場合は drop を許容
         _df_a["prob_decile"] = pd.qcut(_df_a["true_order_prob"],
@@ -1709,7 +1732,7 @@ except Exception as e:
 # ======================================================================
 
 
-# In[41]:
+# In[ ]:
 
 
 # prediction
@@ -1719,18 +1742,25 @@ import datetime as dt
 
 today = dt.date.today()
 # 2025年1月1日以降のデータを取得する場合は、以下の行を変更してください。
-start_date = dt.date(2025, 8, 9)
+start_date = dt.date(2025, 1, 11)
+end = dt.date(2025, 8, 12)
 
 query = f"""
     SELECT * FROM pred.features_with_record
     WHERE race_date BETWEEN '{start_date}' AND '{today}'
+    AND venue = '{venue}'
 """
 
 with psycopg2.connect(**DB_CONF) as conn:
     df_recent = pd.read_sql(query, conn)
+
+df_recent['air_temp'] = None
+df_recent['water_temp'] = None
+# wave_heightを0.01倍
+if 'wave_height' in df_recent.columns:
+    df_recent['wave_height'] = df_recent['wave_height'] * 0.01
 print(df_recent)
 df_recent.to_csv("artifacts/pred_features_recent.csv", index=False)
-
 
 df_recent.drop(columns=exclude, inplace=True, errors="ignore")
 
@@ -1758,71 +1788,13 @@ pred_probs_df = predictor.predict_win_probs(scores_df=pred_scores_df,
 # (3) 馬単/三連単の TOP‑K（PL 方式）を保存
 exa_df, tri_df = predictor.predict_exotics_topk(scores_df=pred_scores_df,
                                                 K=10,
-                                                tau=5.0,
+                                                tau=1.0,
                                                 include_meta=True,
                                                 save_exacta="artifacts/pred_exacta_topk.csv",
                                                 save_trifecta="artifacts/pred_trifecta_topk.csv")
 
-# (4) レース単位の PL top‑1 三連単確率を算出して書き出し／付与
-import numpy as np
-from itertools import permutations
 
-def _pl_top1_from_scores_row(row: pd.Series) -> pd.Series:
-    """
-    lane1_score..lane6_score から
-      - pl_top1_prob: 120通りのPL確率のうち最大（top‑1三連単の確率）
-      - pl_top2_prob: 2番目のPL確率
-      - pl_gap      : 両者の差（自信度の代替）
-      - pl_top1     : top‑1三連単（例 '1-3-5'）
-    を返す。
-    """
-    s = np.array([row[f"lane{i}_score"] for i in range(1, 7)], dtype=float)
-    # 数値安定化（最大値でシフト）
-    s = s - np.max(s)
-    es = np.exp(s)
-    denom0 = float(es.sum())
-
-    best1p, best2p, best1 = -1.0, -1.0, None
-    for a, b, c in permutations(range(6), 3):
-        d1 = denom0
-        d2 = d1 - float(es[a])
-        d3 = d2 - float(es[b])
-        if d2 <= 0 or d3 <= 0:
-            continue
-        p = (float(es[a]) / d1) * (float(es[b]) / d2) * (float(es[c]) / d3)
-        if p > best1p:
-            best2p = best1p
-            best1p = float(p)
-            best1 = (a, b, c)
-        elif p > best2p:
-            best2p = float(p)
-
-    return pd.Series({
-        "pl_top1_prob": best1p,
-        "pl_top2_prob": (best2p if best2p >= 0 else np.nan),
-        "pl_gap": (best1p - best2p) if best2p >= 0 else np.nan,
-        "pl_top1": (f"{best1[0]+1}-{best1[1]+1}-{best1[2]+1}" if best1 is not None else pd.NA),
-    })
-
-# レース単位の要約（race_key, race_date, venue はメタ）
-_pl_summary = pred_scores_df.apply(_pl_top1_from_scores_row, axis=1)
-pred_race_summary = pd.concat(
-    [pred_scores_df[["race_key", "race_date"]], _pl_summary],
-    axis=1
-)
-# 予測用のレース要約CSV（新規）
-pred_race_summary.to_csv("artifacts/pred_race_summary.csv", index=False)
-
-# 既存の三連単TOP-K CSV にも列を付与して上書き保存（rank に関わらず同じ値を持つ）
-tri_df = tri_df.merge(
-    pred_race_summary[["race_key", "pl_top1_prob", "pl_top2_prob", "pl_gap", "pl_top1"]],
-    on="race_key",
-    how="left"
-)
-tri_df.to_csv("artifacts/pred_trifecta_topk.csv", index=False)
-
-
-# In[40]:
+# In[ ]:
 
 
 print("[predict] Prediction completed and saved to artifacts directory.")

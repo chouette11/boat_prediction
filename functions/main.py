@@ -5,6 +5,7 @@ from firebase_functions.options import MemoryOption
 import os
 import torch
 import torch.nn as nn
+import pandas as pd
 import joblib  # scalerの保存・読み込みにjoblibを使うのが一般的です
 from sklearn.preprocessing import StandardScaler
 import beforeinfo_to_features as bf
@@ -211,7 +212,7 @@ def on_request_example(req: https_fn.Request) -> https_fn.Response:
     # ★ グローバルに読み込み済みのPREDICTORを再利用する
     pred_scores_df = PREDICTOR.predict_scores(features_df, include_meta=True)
     pred_probs_df = PREDICTOR.predict_win_probs(scores_df=pred_scores_df, include_meta=True)
-    exa_df, tri_df = PREDICTOR.predict_exotics_topk(scores_df=pred_scores_df, K=10, tau=5.0, include_meta=True)
+    exa_df, tri_df = PREDICTOR.predict_exotics_topk(scores_df=pred_scores_df, K=10, tau=1.0, include_meta=True)
     print(f"[predict] Prediction completed. Scores shape: {pred_scores_df.shape}, Win probs shape: {pred_probs_df.shape}")
     print(f"[predict] Example Scores:\n{pred_scores_df.head()}")
     print(f"[predict] Example Win Probs:\n{pred_probs_df.head()}")
@@ -221,8 +222,15 @@ def on_request_example(req: https_fn.Request) -> https_fn.Response:
     if not tri_df.empty:
         top_tri_prob = tri_df.iloc[0]['prob']
         top_trifecta = tri_df.iloc[0]['trifecta']
-        send_line_message(f"{req.get('jcd')}, {req.get('hd')}, {req.get('rno')}, Top Trifecta: {top_trifecta} with Probability: {top_tri_prob:.4f}")
-        print(f"[predict] Top Trifecta: {top_trifecta} with Probability: {top_tri_prob}")
+        if top_tri_prob > 0.21:  # 確率が1%を超える場合のみ通知
+            jcd = req.get("jcd")
+            hd = req.get("hd")
+            rno = req.get("rno")
+            if jcd and hd and rno:
+                send_line_message(f"{jcd}, {hd}, {rno}, Top Trifecta: {top_trifecta} with Probability: {top_tri_prob:.4f}\nhttps://www.boatrace.jp/owpc/pc/race/raceresult?rno={rno}&jcd={jcd}&hd={hd}")
+                print(f"[predict] Top Trifecta: {top_trifecta} with Probability: {top_tri_prob}")
+        else:
+            print("[predict] Top trifecta probability is below threshold; no notification sent.")
     else:
         print("[predict] No trifecta predictions available.")
 

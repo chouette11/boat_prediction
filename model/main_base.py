@@ -1,31 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[ ]:
-
-
-
-
-
-# In[ ]:
-
-
-
-
-
-
-
-# In[ ]:
-
-
-
-
-
-
-
-
-
-# In[2]:
+# In[88]:
 
 
 import sys
@@ -103,7 +79,7 @@ register_feature(FeatureDef("wind_sin", _wind_sin, deps=["wind_dir_deg"]))
 register_feature(FeatureDef("wind_cos", _wind_cos, deps=["wind_dir_deg"]))
 
 
-# In[3]:
+# In[89]:
 
 
 import nbformat
@@ -122,7 +98,7 @@ else :
         f.write(source)
 
 
-# In[4]:
+# In[90]:
 
 
 load_dotenv(override=True)
@@ -151,7 +127,7 @@ with psycopg2.connect(**DB_CONF) as conn:
 print(f"Loaded {len(result_df)} rows from the database.")
 
 
-# In[5]:
+# In[91]:
 
 
 result_df = apply_features(result_df)
@@ -185,7 +161,7 @@ print(missing_ratio_percent.sort_values(ascending=False))
 os.makedirs("artifacts", exist_ok=True)
 
 
-# In[6]:
+# In[ ]:
 
 
 # ---------------- Loss / Regularization Weights -----------------
@@ -197,10 +173,13 @@ TEMPERATURE   = 0.80   # logits are divided by T at inference
 LAMBDA_WIN = 1.0        # weight for winner‑BCE loss
 
 TOPK_K = 3
-TOPK_WEIGHTS = [3.0, 2.0, 1.0]
+if venue in ['若 松', '芦 屋']:
+    TOPK_WEIGHTS = [3.0, 2.0, 1.0]
+else:
+    TOPK_WEIGHTS = [1.0, 1.0, 1.0]
 
 
-# In[7]:
+# In[93]:
 
 
 def pl_nll(scores: torch.Tensor, ranks: torch.Tensor, reduce: bool = True) -> torch.Tensor:
@@ -270,7 +249,7 @@ print("pl_nll should be ~0 :", pl_nll(scores, ranks).item())
 print("pl_nll_topk (k=3) should be ~0 :", pl_nll_topk(scores, ranks, k=TOPK_K, weights=TOPK_WEIGHTS).item())
 
 
-# In[8]:
+# In[94]:
 
 
 def choose_val_cutoff(
@@ -342,7 +321,7 @@ model = DualHeadRanker(boat_in=boat_dim).to(device)
 opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=5e-5)
 
 
-# In[9]:
+# In[95]:
 
 
 def evaluate_model(model, dataset, device):
@@ -450,7 +429,7 @@ def evaluate_model(model, dataset, device):
 #     print("[diag]   ► finished quick diagnostics\n")
 
 
-# In[10]:
+# In[96]:
 
 
 EPOCHS = 20
@@ -547,7 +526,7 @@ torch.save(model.state_dict(), model_path2)
 print(f"Model saved to {model_path}")
 
 
-# In[ ]:
+# In[97]:
 
 
 # ---- Monkey‑patch ROIAnalyzer so it uses BoatRaceDataset2 (MTL) ----------
@@ -587,7 +566,7 @@ print(f"[simulate] Loaded {len(df_recent)} rows ({start_date} – {today}).")
 print(f"columns: {', '.join(df_recent.columns)}")
 
 
-# In[ ]:
+# In[98]:
 
 
 class _RankOnly(nn.Module):
@@ -642,7 +621,7 @@ else:
     all_ranks  = torch.cat(all_ranks,  dim=0)   # (N,6)
 
 
-# In[ ]:
+# In[99]:
 
 
 # --------------------------------------------------------------------------
@@ -755,7 +734,7 @@ pd.Series(all_imp).sort_values(ascending=False).to_csv(imp_path)
 print(f"[saved] {imp_path}")
 
 
-# In[ ]:
+# In[100]:
 
 
 df_scores = pd.DataFrame(all_scores.numpy(), columns=[f"lane{i}_score" for i in range(1, 7)])
@@ -882,7 +861,7 @@ for n in range(1, 6):
 
 
 
-# In[ ]:
+# In[101]:
 
 
 def top1_accuracy(scores: torch.Tensor, ranks: torch.Tensor) -> float:
@@ -1123,7 +1102,7 @@ with open(metrics_path, "a", newline="") as f:
 print(f"[saved] {metrics_path}")
 
 
-# In[ ]:
+# In[102]:
 
 
 # === 条件別ヒット率/ROI 分析（修正版） =========================
@@ -1732,7 +1711,7 @@ except Exception as e:
 # ======================================================================
 
 
-# In[ ]:
+# In[103]:
 
 
 # prediction
@@ -1794,7 +1773,7 @@ exa_df, tri_df = predictor.predict_exotics_topk(scores_df=pred_scores_df,
                                                 save_trifecta="artifacts/pred_trifecta_topk.csv")
 
 
-# In[ ]:
+# In[104]:
 
 
 print("[predict] Prediction completed and saved to artifacts directory.")

@@ -169,7 +169,7 @@ class ROIPredictor(ROIAnalyzer):
                             df_eval: Optional[pd.DataFrame] = None,
                             scores_df: Optional[pd.DataFrame] = None,
                             K: int = 10,
-                            tau: float = 5.0,
+                            tau: float = 1.0,
                             include_meta: bool = True,
                             save_exacta: Optional[str] = None,
                             save_trifecta: Optional[str] = None) -> Tuple[pd.DataFrame, pd.DataFrame]:

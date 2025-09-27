@@ -1,15 +1,21 @@
+import psycopg2
+import psycopg2.extras
+import pandas as pd
+from shutil import get_terminal_size
+
 def check(conn):
-    cur = conn.cursor()
-    # 今日(Asia/Tokyo)の日付で絞り込み
-    import datetime as dt
-    today = dt.date.today()
-    ex = f"""
+    # DictCursorで列名を一緒に取得
+    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    ex = """
 SELECT *
-FROM feat.filtered_course
-LIMIT 10
+FROM pred.features_with_record
+WHERE race_key = '2025-07-24-07-20'
 """
     print(ex)
+    # 列名を取得
     cur.execute(ex)
+    colnames = [desc[0] for desc in cur.description]
+    print(colnames)
     print(cur.fetchall())
 
     cur.close(); conn.close()

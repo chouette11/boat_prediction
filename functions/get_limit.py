@@ -5,7 +5,7 @@ from urllib.parse import urlparse, parse_qs
 from datetime import datetime, timezone, timedelta
 import json, re
 
-def extract_closing_times():
+def extract_closing_times(jcd: str) -> list[dict]:
     """
     PC版 'レース一覧' ページのHTMLから
     各Rの締切予定時刻・rno・jcd・hd を抽出する。
@@ -20,7 +20,7 @@ def extract_closing_times():
     """
     # 日本標準時
     today = datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d")
-    html = download_pred.download_off_pred(today, kind="raceindex")
+    html = download_pred.download_off_pred(jcd, today, kind="raceindex")
     print(f'html {html[100:300]}...')  # 先頭300文字を表示
     soup = BeautifulSoup(html, "html.parser")
 
@@ -39,7 +39,6 @@ def extract_closing_times():
         href = a.get("href", "")
         q = parse_qs(urlparse(href).query)
         rno = q.get("rno", [None])[0]
-        jcd = q.get("jcd", [None])[0]
         hd  = q.get("hd",  [None])[0]
 
         # レース番号をint化（テキスト "1R" からの抽出でもOK）

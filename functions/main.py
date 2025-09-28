@@ -189,11 +189,11 @@ def check_race_notifications(req: https_fn.Request) -> https_fn.Response:
 # --- HTTPリクエストを処理する関数 ---
 @https_fn.on_request(memory=MemoryOption.GB_2)
 def on_request_example(req: https_fn.Request) -> https_fn.Response:
-    """
-    リクエストごとに実行される処理。
-    モデルの読み込みは行わず、予測処理に専念する。
-    """
-    features_df = bf.main(rno=req.get("rno", 8))  # rnoをリクエストから取得、デフォルトは8
+    threshold_dict = {
+        "20": 0.21,  # 若松
+        "23": 0.22,  # 下関
+    }
+    features_df = bf.main(rno=req.get("rno"), jcd=req.get("jcd"))
     print(f"[predict] Features shape: {features_df.shape}")
     if features_df.empty:
         print("[predict] No rows fetched for the specified period.")
@@ -222,7 +222,8 @@ def on_request_example(req: https_fn.Request) -> https_fn.Response:
     if not tri_df.empty:
         top_tri_prob = tri_df.iloc[0]['prob']
         top_trifecta = tri_df.iloc[0]['trifecta']
-        if top_tri_prob > 0.21:  # 確率が1%を超える場合のみ通知
+        threshold = threshold_dict.get(req.get("jcd"))
+        if top_tri_prob > threshold:
             jcd = req.get("jcd")
             hd = req.get("hd")
             rno = req.get("rno")

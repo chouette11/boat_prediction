@@ -211,19 +211,19 @@ def rename_columns(df: pd.DataFrame, prefix: str) -> pd.DataFrame:
     return df
 
 # --- メイン処理 ---
-def main(rno: int = 8) -> pd.DataFrame:
+def main(rno: int, jcd: str) -> pd.DataFrame:
     # 1. CSVファイルの読み込み
     try:
         today = datetime.now(timezone(timedelta(hours=9))).strftime('%Y-%m-%d')
-        html = download_pred.download_off_pred(today, rno=rno)
+        html = download_pred.download_off_pred(jcd, today, rno=rno)
         # html_path = 'wakamatsu_beforeinfo_20_20250830_8.html'  # ローカルのHTMLファイルパス
         # with open(html_path, 'r', encoding='utf-8') as file:
         #     html = file.read()
-        beforeinfo_df, weather_df = wakamatsu_off_beforeinfo_html_to_csv.parse_boat_race_html(html, is_pred=True)
+        beforeinfo_df, weather_df, meta_df = wakamatsu_off_beforeinfo_html_to_csv.parse_boat_race_html(html, is_pred=True)
         print(beforeinfo_df.head())
         print(weather_df.head())
         filtered_course_df = pd.read_csv('filtered_course.csv')
-        studium = '若 松'
+        studium = meta_df.iloc[0]['place']
         beforeinfo_df['race_no'] = rno
         beforeinfo_df['stadium'] = studium
         beforeinfo_df['race_date'] = today
@@ -259,3 +259,6 @@ def main(rno: int = 8) -> pd.DataFrame:
 
     # 結果をCSVとして保存
     return features_with_record
+
+if __name__ == "__main__":
+    main()

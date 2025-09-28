@@ -5,9 +5,9 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 import requests
 from datetime import datetime
 
-def download_off_pred(start_ymd: str, kind: str = "beforeinfo", rno: int = 1) -> str:
+def download_off_pred(jcd: str, start_ymd: str, kind: str = "beforeinfo", rno: int = 1) -> str:
 
-    base_url = f"https://boatrace.jp/owpc/pc/race/{kind}?jcd=20"
+    base_url = f"https://boatrace.jp/owpc/pc/race/{kind}?jcd={jcd}"
     current_date = datetime.strptime(start_ymd, "%Y-%m-%d")
 
     target_ymd = current_date.strftime("%Y%m%d")

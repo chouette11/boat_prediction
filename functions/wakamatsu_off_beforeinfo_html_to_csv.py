@@ -23,29 +23,23 @@ def parse_boat_race_html(html_content: str, encoding: str = "utf-8", is_pred: bo
     print(f"soup.title: {soup.title.get_text(strip=True)}")
 
     main_label = soup.select_one(".heading1_mainLabel").get_text(strip=True) if soup.select_one(".heading1_mainLabel") else None
-    if main_label and "データがありません" in main_label:
+    if main_label and "データがありません" in main_label or main_label and "エラー" in main_label:
         print("⚠️ データがありません。スキップします。")
         return
-    if main_label and "エラー" in main_label:
-        # エラーcsvを出力
-        print(f"⚠️ エラー情報を {out_path} に保存しました")
 
     # ------------------------------------------------------------------
     # 1) 開催場・レース名・日付
     # ------------------------------------------------------------------
     race_title = soup.select_one(".heading2_titleName").get_text(strip=True)
     race_place = soup.select_one(".heading2_area img")["alt"]          # 例: 若松
+    if len(race_place) == 2:
+        #半角スペースを二文字の間に挿入
+        race_place = f"{race_place[0]} {race_place[1]}"
     race_date  = soup.select_one(".tab2_tabs li.is-active2").get_text(strip=True)  # 例: '1月1日４日目'
 
     if race_date and "中止" in race_date:
         csv_dir = "download/wakamatsu_off_beforeinfo_csv"
         Path(csv_dir).mkdir(exist_ok=True)
-        print(f"中止レースのメタデータを保存: {html_path.stem}_meta.csv")
-        meta_df = pd.DataFrame([{
-            "place": race_place,
-            "race_title": race_title,
-            "date_label": race_date,
-        }])
         return
 
     meta_df = pd.DataFrame([{
@@ -53,21 +47,6 @@ def parse_boat_race_html(html_content: str, encoding: str = "utf-8", is_pred: bo
         "race_title": race_title,
         "date_label": race_date,
     }])
-
-    # ------------------------------------------------------------------
-    # 2) 締切予定時刻テーブル
-    # ------------------------------------------------------------------
-    # ヘッダ行（1R〜12R 等）
-    # header_cells = soup.select(".table1 thead tr:nth-of-type(1) th")[2:]  # 最初の2列は『レース』見出し
-    # race_cols = [th.get_text(strip=True) for th in header_cells]
-
-    # # 締切時刻行
-    # t_close_row = soup.find("td", string="締切予定時刻").parent
-    # close_times = [td.get_text(strip=True) for td in t_close_row.find_all("td")[2:]]
-
-    # print(f"締切予定時刻: {close_times}")
-    # print(f"レース: {race_cols}")
-    # closing_df = pd.DataFrame([close_times], columns=race_cols)
 
     # ------------------------------------------------------------------
     # 3) 出走表（選手情報）
@@ -149,18 +128,7 @@ def parse_boat_race_html(html_content: str, encoding: str = "utf-8", is_pred: bo
         "wind_dir_icon": wblock.select_one(".is-windDirection p")["class"][-1],
     }])
 
-    # ------------------------------------------------------------------
-    # 6) CSV 出力
-    # ------------------------------------------------------------------
-    # csv_dir = html_dir.replace("html", "csv")
-    if is_pred:
-        csv_dir = 'download/wakamatsu_off_beforeinfo_pred_csv'
-    Path(csv_dir).mkdir(exist_ok=True)
-
-    return racers_df, weather_df
-
-    print("✅ 生成完了: meta.csv, closing_times.csv, racers.csv, start_exhibition.csv, weather.csv")
-
+    return racers_df, weather_df, meta_df
 
 if __name__ == "__main__":
     import os

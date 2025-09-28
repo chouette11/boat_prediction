@@ -1,6 +1,6 @@
 from firebase_functions import https_fn
 from firebase_functions.options import set_global_options
-from firebase_admin import initialize_app
+from firebase_admin import initialize_app, firestore
 from firebase_functions.options import MemoryOption
 import os
 import torch
@@ -27,6 +27,9 @@ except Exception:
 # --- グローバル設定 (変更なし) ---
 set_global_options(max_instances=10)
 initialize_app()
+
+# Firestore (Admin SDK)
+DB = firestore.client()
 
 # --- グローバルスコープでモデルとスケーラーを一度だけ読み込む ---
 
@@ -150,45 +153,105 @@ def check_race_notifications(req: https_fn.Request) -> https_fn.Response:
     現在時刻がレース締切の BEFORE_MINUTES 分前〜締切時刻までの範囲に入っていれば
     on_request_example(None) を実行してLINE通知を行う。
     """
-    try:
-        closing_times = get_limit.extract_closing_times()
-    except Exception as e:
-        msg = f"[check] Failed to fetch closing times: {e}"
-        print(msg)
-        return https_fn.Response(msg, status=500)
+    for i in (20, 23):
+        jcd = f"0{i}" if i < 10 else str(i)
+        # --- 1日1回だけダウンロードするための日次キャッシュ（Firestore） ---
+        jst = timezone(timedelta(hours=9))
+        now_jst = datetime.now(jst)
+        today_hd = now_jst.strftime("%Y%m%d")
+        daily_doc_id = f"{jcd}_{today_hd}"
 
-    # 日本標準時
-    now_jst = datetime.now(timezone(timedelta(hours=9)))
-    print('ナウ', now_jst.isoformat())
-    print('締切一覧', closing_times)
-    executed = 0
-    for item in closing_times:
-        iso = item.get("iso_jst")
-        rno = item.get("rno")
-        if not iso:
-            continue
-        dt = datetime.fromisoformat(iso)         # JST(+09:00) のawareなdatetime
-        now_tz = now_jst.replace(tzinfo=dt.tzinfo)
-        notify_start = dt - timedelta(minutes=BEFORE_MINUTES)
-        print(notify_start, now_tz, dt, rno)
+        # まずは Firestore の日次キャッシュを試す
+        closing_times = None
+        try:
+            daily_doc = DB.collection("closing_time_daily").document(daily_doc_id).get()
+            if daily_doc.exists:
+                payload = daily_doc.to_dict()
+                closing_times = payload.get("items") or []
+                print(f"[cache] Using cached closing times for {daily_doc_id} (count={len(closing_times)})")
+        except Exception as e:
+            print(f"[firestore] failed to read daily cache for {daily_doc_id}: {e}")
 
-        if notify_start <= now_tz <= dt:
-            executed += 1
-            req = {
-                "jcd": item.get("jcd"),
-                "hd": item.get("hd"),
-                "rno": rno,
-                "closing_time": iso,
-            }
-            on_request_example(req)              # 予測とLINE送信を実行
+        # キャッシュが無ければダウンロード → Firestore に保存
+        if not closing_times:
+            try:
+                closing_times = get_limit.extract_closing_times(jcd=jcd)
+                DB.collection("closing_time_daily").document(daily_doc_id).set({
+                    "jcd": jcd,
+                    "hd": today_hd,
+                    "count": len(closing_times),
+                    "items": closing_times,
+                    "fetchedAt": firestore.SERVER_TIMESTAMP,
+                }, merge=True)
+                # 任意: 履歴用スナップショットも作成（デバッグ・差分検知用）
+                snap_id = f"{daily_doc_id}_{now_jst.strftime('%H%M%S')}"
+                DB.collection("closing_time_snapshots").document(snap_id).set({
+                    "jcd": jcd,
+                    "hd": today_hd,
+                    "count": len(closing_times),
+                    "items": closing_times,
+                    "fetchedAt": firestore.SERVER_TIMESTAMP,
+                }, merge=True)
+                print(f"[fetch] Downloaded and cached closing times for {daily_doc_id} (count={len(closing_times)})")
+            except Exception as e:
+                msg = f"[check] Failed to fetch closing times: {e}"
+                print(msg)
+                return https_fn.Response(msg, status=500)
+        print('ナウ', now_jst.isoformat())
+        print('締切一覧', closing_times)
+        for item in closing_times:
+            iso = item.get("iso_jst")
+            rno = item.get("rno")
 
-    if executed:
-        return https_fn.Response(f"Executed {executed} notification(s).", status=200)
-    return https_fn.Response("No notifications to send at this time.", status=200)
+            # Firestore: upsert closing time document
+            doc_id = f"{item.get('jcd')}_{item.get('hd')}_{item.get('rno')}"
+            try:
+                DB.collection("closing_times").document(doc_id).set({
+                    "jcd": item.get("jcd"),
+                    "hd": item.get("hd"),
+                    "rno": item.get("rno"),
+                    "time": item.get("time"),
+                    "iso_jst": item.get("iso_jst"),
+                    "href": item.get("href"),
+                    "updatedAt": firestore.SERVER_TIMESTAMP,
+                }, merge=True)
+            except Exception as e:
+                print(f"[firestore] closing_times upsert failed for {doc_id}: {e}")
+
+            if not iso:
+                continue
+            dt = datetime.fromisoformat(iso)         # JST(+09:00) のawareなdatetime
+            now_tz = now_jst.replace(tzinfo=dt.tzinfo)
+            notify_start = dt - timedelta(minutes=BEFORE_MINUTES)
+
+            # Firestore: skip if already notified for this race
+            notif_doc_id = doc_id
+            try:
+                notif_doc = DB.collection("race_notifications").document(notif_doc_id).get()
+                if notif_doc.exists and notif_doc.to_dict().get("sent"):
+                    print(f"[check] Already notified for {notif_doc_id}; skipping.")
+                    continue
+            except Exception as e:
+                print(f"[firestore] notification doc read failed for {notif_doc_id}: {e}")
+
+            print(notify_start, now_tz, dt, rno)
+
+            if notify_start <= now_tz <= dt:
+                req = {
+                    "jcd": item.get("jcd"),
+                    "hd": item.get("hd"),
+                    "rno": rno,
+                    "closing_time": iso,
+                    "fs_notif_doc_id": notif_doc_id,
+                }
+                on_request_example(req)              # 予測とLINE送信を実行
+
+    return https_fn.Response("End check", status=200)
 
 # --- HTTPリクエストを処理する関数 ---
 @https_fn.on_request(memory=MemoryOption.GB_2)
 def on_request_example(req: https_fn.Request) -> https_fn.Response:
+    fs_notif_doc_id = req.get("fs_notif_doc_id")
     threshold_dict = {
         "20": 0.21,  # 若松
         "23": 0.22,  # 下関
@@ -230,7 +293,38 @@ def on_request_example(req: https_fn.Request) -> https_fn.Response:
             if jcd and hd and rno:
                 send_line_message(f"{jcd}, {hd}, {rno}, Top Trifecta: {top_trifecta} with Probability: {top_tri_prob:.4f}\nhttps://www.boatrace.jp/owpc/pc/race/raceresult?rno={rno}&jcd={jcd}&hd={hd}")
                 print(f"[predict] Top Trifecta: {top_trifecta} with Probability: {top_tri_prob}")
+                try:
+                    notif_doc_id = fs_notif_doc_id or f"{jcd}_{hd}_{rno}"
+                    DB.collection("race_notifications").document(notif_doc_id).set({
+                        "jcd": jcd,
+                        "hd": hd,
+                        "rno": rno,
+                        "closing_time": req.get("closing_time"),
+                        "sent": True,
+                        "sentAt": firestore.SERVER_TIMESTAMP,
+                        "tri": top_trifecta,
+                        "prob": float(top_tri_prob),
+                        "result_url": f"https://www.boatrace.jp/owpc/pc/race/raceresult?rno={rno}&jcd={jcd}&hd={hd}",
+                    }, merge=True)
+                except Exception as e:
+                    print(f"[firestore] failed to mark notification sent for {notif_doc_id}: {e}")
         else:
+            jcd = req.get("jcd")
+            hd = req.get("hd")
+            rno = req.get("rno")
+            try:
+                doc_id = fs_notif_doc_id or f"{jcd}_{hd}_{rno}"
+                DB.collection("race_notifications").document(doc_id).set({
+                    "jcd": jcd,
+                    "hd": hd,
+                    "rno": rno,
+                    "closing_time": req.get("closing_time"),
+                    "sent": False,
+                    "lastEvaluatedAt": firestore.SERVER_TIMESTAMP,
+                    "topTriProb": float(top_tri_prob),
+                }, merge=True)
+            except Exception as e:
+                print(f"[firestore] failed to update evaluation for {doc_id}: {e}")
             print("[predict] Top trifecta probability is below threshold; no notification sent.")
     else:
         print("[predict] No trifecta predictions available.")

@@ -24,6 +24,11 @@ def extract_closing_times(jcd: str) -> list[dict]:
     print(f'html {html[100:300]}...')  # 先頭300文字を表示
     soup = BeautifulSoup(html, "html.parser")
 
+    main_label = soup.select_one(".heading1_mainLabel").get_text(strip=True) if soup.select_one(".heading1_mainLabel") else None
+    if main_label and "データがありません" in main_label or main_label and "エラー" in main_label:
+        print("⚠️ データがありません。スキップします。")
+        return ["Not held"]
+
     results = []
     # table > tbody > tr を走査（tbodyは複数に分かれている想定）
     for tr in soup.select("div.table1 table tbody > tr"):

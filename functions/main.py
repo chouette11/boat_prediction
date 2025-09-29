@@ -201,7 +201,7 @@ def check_race_notifications(req: https_fn.Request) -> https_fn.Response:
     現在時刻がレース締切の BEFORE_MINUTES 分前〜締切時刻までの範囲に入っていれば
     on_request_example(None) を実行してLINE通知を行う。
     """
-    for i in (19, 20):
+    for i in (15, 19, 20):
         jcd = f"0{i}" if i < 10 else str(i)
         # --- 1日1回だけダウンロードするための日次キャッシュ（Firestore） ---
         jst = timezone(timedelta(hours=9))
@@ -231,15 +231,6 @@ def check_race_notifications(req: https_fn.Request) -> https_fn.Response:
                     "items": closing_times,
                     "fetchedAt": firestore.SERVER_TIMESTAMP,
                 }, merge=True)
-                # 任意: 履歴用スナップショットも作成（デバッグ・差分検知用）
-                snap_id = f"{daily_doc_id}_{now_jst.strftime('%H%M%S')}"
-                DB.collection("closing_time_snapshots").document(snap_id).set({
-                    "jcd": jcd,
-                    "hd": today_hd,
-                    "count": len(closing_times),
-                    "items": closing_times,
-                    "fetchedAt": firestore.SERVER_TIMESTAMP,
-                }, merge=True)
                 print(f"[fetch] Downloaded and cached closing times for {daily_doc_id} (count={len(closing_times)})")
             except Exception as e:
                 msg = f"[check] Failed to fetch closing times: {e}"
@@ -255,18 +246,6 @@ def check_race_notifications(req: https_fn.Request) -> https_fn.Response:
 
             # Firestore: upsert closing time document
             doc_id = f"{item.get('jcd')}_{item.get('hd')}_{item.get('rno')}"
-            try:
-                DB.collection("closing_times").document(doc_id).set({
-                    "jcd": item.get("jcd"),
-                    "hd": item.get("hd"),
-                    "rno": item.get("rno"),
-                    "time": item.get("time"),
-                    "iso_jst": item.get("iso_jst"),
-                    "href": item.get("href"),
-                    "updatedAt": firestore.SERVER_TIMESTAMP,
-                }, merge=True)
-            except Exception as e:
-                print(f"[firestore] closing_times upsert failed for {doc_id}: {e}")
 
             if not iso:
                 continue
@@ -303,6 +282,7 @@ def check_race_notifications(req: https_fn.Request) -> https_fn.Response:
 def on_request_example(req: https_fn.Request) -> https_fn.Response:
     fs_notif_doc_id = req.get("fs_notif_doc_id")
     threshold_dict = {
+        "15": 0.30,  # 丸亀
         "19": 0.22,  # 下関
         "20": 0.21,  # 若松
     }
@@ -337,6 +317,9 @@ def on_request_example(req: https_fn.Request) -> https_fn.Response:
         top_tri_prob = tri_df.iloc[0]['prob']
         top_trifecta = tri_df.iloc[0]['trifecta']
         threshold = threshold_dict.get(req.get("jcd"))
+        probs_dict = {}
+        for i in range(10):
+            probs_dict[tri_df.iloc[i]['trifecta']] = tri_df.iloc[i]['prob'] if i < len(tri_df) else None
         if top_tri_prob > threshold:
             jcd = req.get("jcd")
             hd = req.get("hd")
@@ -356,6 +339,8 @@ def on_request_example(req: https_fn.Request) -> https_fn.Response:
                         "tri": top_trifecta,
                         "prob": float(top_tri_prob),
                         "result_url": f"https://www.boatrace.jp/owpc/pc/race/raceresult?rno={rno}&jcd={jcd}&hd={hd}",
+                        "features": features_df.to_dict(orient="records"),
+                        "probs_dict": probs_dict,
                     }, merge=True)
                 except Exception as e:
                     print(f"[firestore] failed to mark notification sent for {notif_doc_id}: {e}")
@@ -372,7 +357,11 @@ def on_request_example(req: https_fn.Request) -> https_fn.Response:
                     "closing_time": req.get("closing_time"),
                     "sent": False,
                     "lastEvaluatedAt": firestore.SERVER_TIMESTAMP,
+                    "tri": top_trifecta,
                     "topTriProb": float(top_tri_prob),
+                    "result_url": f"https://www.boatrace.jp/owpc/pc/race/raceresult?rno={rno}&jcd={jcd}&hd={hd}",
+                    "features": features_df.to_dict(orient="records"),
+                    "probs_dict": probs_dict,
                 }, merge=True)
             except Exception as e:
                 print(f"[firestore] failed to update evaluation for {doc_id}: {e}")

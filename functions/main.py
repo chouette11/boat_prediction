@@ -201,7 +201,7 @@ def check_race_notifications(req: https_fn.Request) -> https_fn.Response:
     現在時刻がレース締切の BEFORE_MINUTES 分前〜締切時刻までの範囲に入っていれば
     on_request_example(None) を実行してLINE通知を行う。
     """
-    for i in (15, 19, 20):
+    for i in (15, 19, 20, 24):
         jcd = f"0{i}" if i < 10 else str(i)
         # --- 1日1回だけダウンロードするための日次キャッシュ（Firestore） ---
         jst = timezone(timedelta(hours=9))
@@ -285,6 +285,7 @@ def on_request_example(req: https_fn.Request) -> https_fn.Response:
         "15": 0.30,  # 丸亀
         "19": 0.22,  # 下関
         "20": 0.21,  # 若松
+        "24": 0.14,  # 大村
     }
     features_df = bf.main(rno=req.get("rno"), jcd=req.get("jcd"))
     print(f"[predict] Features shape: {features_df.shape}")

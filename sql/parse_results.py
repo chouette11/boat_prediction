@@ -365,8 +365,8 @@ def main():
     from dotenv import load_dotenv
     load_dotenv(override=True)
     files = []
-    dir_path = 'download/txt/results'
-    schema_path = 'sql2/02_boat_results_schema.sql'
+    dir_path = 'download/txt/results/2025/09'
+    schema_path = 'sql/02_boat_results_schema.sql'
     root = Path(dir_path)
     for p in root.rglob('*'):
         if p.is_file() and p.suffix.lower() == '.txt':

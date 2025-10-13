@@ -360,7 +360,7 @@ def main():
     
     # Collect files
     files = []
-    dir_path = 'download/txt/programs/2022'
+    dir_path = 'download/txt/programs/2025/09'
     schema_path = 'sql2/02_boat_programs_schema.sql'
     root = Path(dir_path)
     if not root.exists() or not root.is_dir():

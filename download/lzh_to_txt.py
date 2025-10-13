@@ -22,8 +22,8 @@ def lzh_to_txt(lzh_path: str, base_out_dir: str, rel_path: str):
 
 # 解凍例：ある月をまとめて解凍
 if __name__ == "__main__":
-    results_root = "download/lzh/results/2022"
-    programs_root = "download/lzh/programs/2022"
+    results_root = "download/lzh/results/2025/09"
+    programs_root = "download/lzh/programs/2025/09"
     pathlib.Path("download/txt/results").mkdir(parents=True, exist_ok=True)
     pathlib.Path("download/txt/programs").mkdir(parents=True, exist_ok=True)
     for root, dirs, files in os.walk(results_root):

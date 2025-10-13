@@ -25,7 +25,7 @@ def parse_boat_race_html(html_content: str, encoding: str = "utf-8", is_pred: bo
     main_label = soup.select_one(".heading1_mainLabel").get_text(strip=True) if soup.select_one(".heading1_mainLabel") else None
     if main_label and "データがありません" in main_label or main_label and "エラー" in main_label:
         print("⚠️ データがありません。スキップします。")
-        return
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     # ------------------------------------------------------------------
     # 1) 開催場・レース名・日付
@@ -40,7 +40,7 @@ def parse_boat_race_html(html_content: str, encoding: str = "utf-8", is_pred: bo
     if race_date and "中止" in race_date:
         csv_dir = "download/wakamatsu_off_beforeinfo_csv"
         Path(csv_dir).mkdir(exist_ok=True)
-        return
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     meta_df = pd.DataFrame([{
         "place": race_place,
@@ -107,7 +107,7 @@ def parse_boat_race_html(html_content: str, encoding: str = "utf-8", is_pred: bo
             "race_title": race_title,
             "date_label": race_date,
         }])
-        return
+        return pd.DataFrame(), pd.DataFrame(), meta_df
 
 
     start_ex_df = pd.DataFrame(st_data).sort_values("lane")

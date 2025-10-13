@@ -75,17 +75,17 @@ initalldb:
 	python sql/confirm.py
 
 .PHONY: rebuild_alldb
-rebuild_alldb:
+rebuild_alldb:	
 	# ⑤ マイグレーションを実行
-	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql2/03_merge_staging.sql
+	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql/04_functions.sql
 
 	# ⑥ ビューを作成
-	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql2/05_views_core.sql
+	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql/05_views_core.sql
 
 	# ⑦ 特徴量を作成
-	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql2/06_views_feat.sql
+	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql/06_views_feat.sql
 
-	python sql2/confirm.py
+	python sql/confirm.py
 
 .PHONY: alldb_pred
 alldb_pred:

@@ -201,7 +201,7 @@ def check_race_notifications(req: https_fn.Request) -> https_fn.Response:
     現在時刻がレース締切の BEFORE_MINUTES 分前〜締切時刻までの範囲に入っていれば
     on_request_example(None) を実行してLINE通知を行う。
     """
-    for i in (15, 19, 20, 24):
+    for i in (1, 7, 12, 15, 19, 20, 24):
         jcd = f"0{i}" if i < 10 else str(i)
         # --- 1日1回だけダウンロードするための日次キャッシュ（Firestore） ---
         jst = timezone(timedelta(hours=9))
@@ -282,6 +282,9 @@ def check_race_notifications(req: https_fn.Request) -> https_fn.Response:
 def on_request_example(req: https_fn.Request) -> https_fn.Response:
     fs_notif_doc_id = req.get("fs_notif_doc_id")
     threshold_dict = {
+        "01": 0.16,  # 桐生
+        "07": 0.16,  # 蒲郡
+        "12": 0.10,  # 住之江
         "15": 0.30,  # 丸亀
         "19": 0.22,  # 下関
         "20": 0.21,  # 若松

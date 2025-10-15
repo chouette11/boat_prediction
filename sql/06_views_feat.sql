@@ -224,6 +224,17 @@ pos AS (
     MIN(lane) FILTER (WHERE ord = 3) AS third_lane
   FROM ord
   GROUP BY race_key
+),
+-- 三連複（順不同）用に1-3着のレーンを昇順に並べ替え
+pos3f AS (
+  SELECT
+    race_key,
+    LEAST(first_lane, second_lane, third_lane) AS trio_lane1,
+    (first_lane + second_lane + third_lane)
+      - LEAST(first_lane, second_lane, third_lane)
+      - GREATEST(first_lane, second_lane, third_lane) AS trio_lane2,
+    GREATEST(first_lane, second_lane, third_lane) AS trio_lane3
+  FROM pos
 )
 SELECT
     tf.*,
@@ -231,14 +242,22 @@ SELECT
     pos.second_lane,
     pos.third_lane,
     (p.payout_yen / 100.0)       AS trifecta_odds,
-    p.popularity_rank  AS trifecta_popularity_rank
+    p.popularity_rank            AS trifecta_popularity_rank,
+    (pf3.payout_yen / 100.0)     AS trio_odds,
+    pf3.popularity_rank          AS trio_popularity_rank
 FROM feat.train_features_base tf
-LEFT JOIN pos USING (race_key)
+LEFT JOIN pos ON pos.race_key = tf.race_key
 LEFT JOIN core.payout3t p
   ON p.race_key = tf.race_key
  AND p.first_lane = pos.first_lane
  AND p.second_lane = pos.second_lane
  AND p.third_lane  = pos.third_lane
+LEFT JOIN pos3f ON pos3f.race_key = tf.race_key
+LEFT JOIN core.payout3f pf3
+  ON pf3.race_key = tf.race_key
+ AND pf3.first_lane = pos3f.trio_lane1
+ AND pf3.second_lane = pos3f.trio_lane2
+ AND pf3.third_lane  = pos3f.trio_lane3
 WITH NO DATA;
 
 /* ---------- REFRESH 文 ---------- */
@@ -288,4 +307,3 @@ CREATE INDEX IF NOT EXISTS idx_feat_tf2_lane6
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_feat_tf2_lane_stats_race_key
   ON feat.tf2_lane_stats (race_key);
-  

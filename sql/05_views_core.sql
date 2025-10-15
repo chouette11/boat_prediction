@@ -242,11 +242,59 @@ SELECT DISTINCT ON (race_key, first_lane, second_lane, third_lane)
 FROM clean
 ORDER BY race_key, first_lane, second_lane, third_lane;
 
+-- 払戻（3連複：レーン分解） ---------------------------------
+CREATE MATERIALIZED VIEW IF NOT EXISTS core.payout3f AS
+WITH base AS (
+  SELECT
+    race_key,
+    -- 全角数字→半角へ正規化後、「数字以外」をすべて除去
+    regexp_replace(
+      translate(combination, '０１２３４５６７８９', '0123456789'),
+      '[^0-9]+', '', 'g'
+    ) AS comb,
+    payout_yen,
+    popularity_rank
+  FROM core.payouts
+  -- ラベルは環境により半角/全角が混在するため両方許容
+  WHERE bet_type IN ('3連複','３連複')
+),
+clean AS (
+  -- 1〜6 の数字がちょうど3桁だけ残ったものに限定（返還/特払などを除外）
+  SELECT race_key, comb, payout_yen, popularity_rank
+  FROM base
+  WHERE comb ~ '^[1-6]{3}$'
+),
+sorted AS (
+  -- 三連複は順不同のため、3桁を昇順に正規化
+  SELECT
+    race_key,
+    (SELECT array_agg(x ORDER BY x)
+       FROM unnest(ARRAY[
+         substring(comb,1,1)::int,
+         substring(comb,2,1)::int,
+         substring(comb,3,1)::int
+       ]) AS x) AS lanes,
+    payout_yen,
+    popularity_rank
+  FROM clean
+)
+SELECT DISTINCT ON (race_key, lanes[1], lanes[2], lanes[3])
+  race_key,
+  lanes[1] AS first_lane,
+  lanes[2] AS second_lane,
+  lanes[3] AS third_lane,
+  payout_yen,
+  popularity_rank
+FROM sorted
+ORDER BY race_key, lanes[1], lanes[2], lanes[3];
+
 -- Indexes for payout join performance
 CREATE INDEX IF NOT EXISTS idx_core_payouts_key_type_comb
   ON core.payouts (race_key, bet_type, combination);
 CREATE INDEX IF NOT EXISTS idx_core_payout3t_key_lanes
   ON core.payout3t (race_key, first_lane, second_lane, third_lane);
+CREATE INDEX IF NOT EXISTS idx_core_payout3f_key_lanes
+  ON core.payout3f (race_key, first_lane, second_lane, third_lane);
 
 -- ==========================================================
 -- REFRESH MATERIALIZED VIEWS
@@ -257,6 +305,7 @@ REFRESH MATERIALIZED VIEW core.results;
 REFRESH MATERIALIZED VIEW core.weather;
 REFRESH MATERIALIZED VIEW core.payouts;
 REFRESH MATERIALIZED VIEW core.payout3t;
+REFRESH MATERIALIZED VIEW core.payout3f;
 
 -- ==========================================================
 -- データ存在チェック（core.* のマテビューすべて）

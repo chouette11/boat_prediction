@@ -772,7 +772,7 @@ df_score_ranks = pd.concat([df_scores, df_ranks], axis=1)
 df_score_ranks["race_key"] = all_keys
 
 df_score_ranks = df_score_ranks.drop_duplicates()
-df_score_ranks = df_score_ranks.merge(_df_odds[["race_key","trifecta_odds"]], on="race_key", how="left")
+df_score_ranks = df_score_ranks.merge(_df_odds[["race_key","trifecta_odds", "trio_odds"]], on="race_key", how="left")
 
 score_cols = [f"lane{i}_score" for i in range(1, 7)]
 rank_cols  = [f"lane{i}_rank"  for i in range(1, 7)]
@@ -804,6 +804,28 @@ def pl_true_order_prob(scores, ranks):
         denom -= float(w[idx])
     return float(p)
 
+def true_trio_prob(scores, ranks):
+    """
+    3連複（着順不問）で '真の3着以内' の確率を計算。
+    scores: 長さ6のスコア配列, ranks: 長さ6の真の順位 (1=最上位)
+    """
+    w = np.exp(np.array(scores, dtype=float))
+    trio_indices = [i for i, r in enumerate(ranks) if r <= 3]  # 真の3着以内のインデックス
+    total_prob = 0.0
+
+    for perm in permutations(trio_indices, 3):
+        denom = float(w.sum())
+        p = 1.0
+        for idx in perm:
+            if denom <= 0:
+                p = 0.0
+                break
+            p *= float(w[idx] / denom)
+            denom -= float(w[idx])
+        total_prob += p
+
+    return float(total_prob)
+
 # 6! (=720) 通りの全順位
 ALL_PERMS = list(permutations(range(6), 6))
 
@@ -833,12 +855,51 @@ def true_order_rank(scores, ranks):
             return k
     return len(probs) + 1  # 通常は到達しない
 
+def true_trio_rank(scores, ranks):
+    """
+    全 6! 通りの PL 確率で並べたとき、真の3着以内が何番目か（1始まり）。
+    """
+    w = np.exp(np.array(scores, dtype=float))
+    denom0 = float(w.sum())
+    trio_indices = [i for i, r in enumerate(ranks) if r <= 3]  # 真の3着以内のインデックス
+
+    def prob_of_perm(perm):
+        denom = denom0
+        p = 1.0
+        for idx in perm:
+            if denom <= 0:
+                return 0.0
+            p *= float(w[idx] / denom)
+            denom -= float(w[idx])
+        return p
+
+    trio_perms = list(permutations(trio_indices, 3))
+    all_perms = list(permutations(range(6), 6))
+    probs = []
+
+    for perm in all_perms:
+        p = prob_of_perm(perm)
+        probs.append((perm, p))
+
+    probs.sort(key=lambda x: x[1], reverse=True)
+
+    for k, (perm, _) in enumerate(probs, start=1):
+        if any(perm[:3] == trio_perm for trio_perm in trio_perms):
+            return k
+    return len(probs) + 1  # 通常は到達しない
+
 # 列の追加
 df_score_ranks["true_order_prob"] = df_score_ranks.apply(
     lambda row: pl_true_order_prob(row["scores"], row["ranks"]), axis=1
 )
+df_score_ranks["true_trio_prob"] = df_score_ranks.apply(
+    lambda row: true_trio_prob(row["scores"], row["ranks"]), axis=1
+)
 df_score_ranks["true_order_rank"] = df_score_ranks.apply(
     lambda row: true_order_rank(row["scores"], row["ranks"]), axis=1
+)
+df_score_ranks["true_trio_rank"] = df_score_ranks.apply(
+    lambda row: true_trio_rank(row["scores"], row["ranks"]), axis=1
 )
 
 def _order_str_from_scores(scores_list):
@@ -856,13 +917,20 @@ def _is_hit_trifecta(pred_scores, true_ranks):
     true_top3 = torch.topk(-torch.tensor(true_ranks), k=3).indices.tolist()
     return pred_top3 == true_top3
 
+def _is_hit_trio(pred_scores, true_ranks):
+    pred_top3 = set(torch.topk(torch.tensor(pred_scores), k=3).indices.tolist())
+    true_top3 = set(torch.topk(-torch.tensor(true_ranks), k=3).indices.tolist())
+    return pred_top3 == true_top3
+
 # 列追加（CSVにも出る）
 df_score_ranks["pred_order_str"] = df_score_ranks["scores"].apply(_order_str_from_scores)
 df_score_ranks["true_order_str"] = df_score_ranks["ranks"].apply(_order_str_from_ranks)
 df_score_ranks["is_hit_trifecta"] = df_score_ranks.apply(
     lambda row: _is_hit_trifecta(row["scores"], row["ranks"]), axis=1
 )
-
+df_score_ranks["is_hit_trio"] = df_score_ranks.apply(
+    lambda row: _is_hit_trio(row["scores"], row["ranks"]), axis=1
+)
 
 df_score_ranks.to_csv(f"artifacts/{venue}/merged_scores_ranks_{venue}.csv", index=False)
 total_benefit = 0.0

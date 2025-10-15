@@ -91,7 +91,7 @@ class ROIAnalyzer:
         df = self.preprocess_df(df_eval, self.scaler, self.num_cols)
         loader = self._build_loader(df)
         if not is_pred:
-            df_odds = df[["race_key", "trifecta_odds"]].copy()
+            df_odds = df[["race_key", "trifecta_odds", "trio_odds"]].copy()
             return loader, df, df_odds
         else:
             return loader, df, pd.DataFrame()

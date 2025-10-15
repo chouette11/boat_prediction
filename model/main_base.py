@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[88]:
+# In[1]:
 
 
 import sys
@@ -79,7 +79,7 @@ register_feature(FeatureDef("wind_sin", _wind_sin, deps=["wind_dir_deg"]))
 register_feature(FeatureDef("wind_cos", _wind_cos, deps=["wind_dir_deg"]))
 
 
-# In[89]:
+# In[2]:
 
 
 import nbformat
@@ -98,7 +98,7 @@ else :
         f.write(source)
 
 
-# In[90]:
+# In[ ]:
 
 
 load_dotenv(override=True)
@@ -127,7 +127,7 @@ with psycopg2.connect(**DB_CONF) as conn:
 print(f"Loaded {len(result_df)} rows from the database.")
 
 
-# In[91]:
+# In[4]:
 
 
 result_df = apply_features(result_df)
@@ -161,7 +161,7 @@ print(missing_ratio_percent.sort_values(ascending=False))
 os.makedirs("artifacts", exist_ok=True)
 
 
-# In[ ]:
+# In[5]:
 
 
 # ---------------- Loss / Regularization Weights -----------------
@@ -170,16 +170,25 @@ L1_ALPHA  = 0.02     # weight for rank‑L1 loss
 CLIP_NORM = 10.0     # gradient‑clipping threshold (was 5.0)
 RANKNET_ALPHA = 0.10   # weight for pairwise RankNet loss
 TEMPERATURE   = 0.80   # logits are divided by T at inference
-LAMBDA_WIN = 1.0        # weight for winner‑BCE loss
+if venue in ['丸 亀']:
+    LAMBDA_WIN = 0.8        # weight for winner‑BCE loss
+else:
+    LAMBDA_WIN = 1.0        # weight for winner‑BCE loss
 
 TOPK_K = 3
-if venue in ['若 松', '芦 屋']:
+if venue in ['若 松', '芦 屋', '蒲 郡']:
     TOPK_WEIGHTS = [3.0, 2.0, 1.0]
+elif venue in ['丸 亀']:
+    TOPK_WEIGHTS = [2.0, 2.0, 1.0]
+elif venue in ['大 村']:
+    TOPK_WEIGHTS = [1.0, 1.0, 1.0]
 else:
     TOPK_WEIGHTS = [1.0, 1.0, 1.0]
 
+print(f"TOPK_WEIGHTS: {TOPK_WEIGHTS}")
 
-# In[93]:
+
+# In[6]:
 
 
 def pl_nll(scores: torch.Tensor, ranks: torch.Tensor, reduce: bool = True) -> torch.Tensor:
@@ -249,7 +258,7 @@ print("pl_nll should be ~0 :", pl_nll(scores, ranks).item())
 print("pl_nll_topk (k=3) should be ~0 :", pl_nll_topk(scores, ranks, k=TOPK_K, weights=TOPK_WEIGHTS).item())
 
 
-# In[94]:
+# In[7]:
 
 
 def choose_val_cutoff(
@@ -298,9 +307,20 @@ scaler = StandardScaler().fit(df_tr[NUM_COLS])
 df_tr[NUM_COLS] = scaler.transform(df_tr[NUM_COLS])
 df_va[NUM_COLS] = scaler.transform(df_va[NUM_COLS])
 # scalerを保存
+
+jcd_dict = {
+    '桐 生': '01', '戸 田': '02', '江戸川': '03', '平和島': '04', '多摩川': '05',
+    '浜名湖': '06', '蒲 郡': '07', '常 滑': '08', '津': '09',    '三 国': '10',
+    'びわこ': '11', '住之江': '12', '尼 崎': '13', '鳴 門': '14', '丸 亀': '15',
+    '児 島': '16',  '宮 島': '17',  '徳 山': '18',  '下 関': '19',  '若 松': '20',
+    '芦 屋':  '21',  '福 岡':  '22',  '唐 津':  '23',  '大 村':  '24'
+}
 now = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-joblib.dump(scaler, f"artifacts/scalers/scaler_{now}.joblib")
-joblib.dump(scaler, f"../functions/scalers/scaler_{now}.joblib")
+jcd = jcd_dict[venue]
+os.makedirs(f"artifacts/scalers/{jcd}", exist_ok=True)
+os.makedirs(f"../functions/scalers/{jcd}", exist_ok=True)
+joblib.dump(scaler, f"artifacts/scalers/{jcd}/scaler_{now}.joblib")
+joblib.dump(scaler, f"../functions/scalers/{jcd}/scaler_{now}.joblib")
 
 mode = "zscore"  
 ds_train = BoatRaceDatasetBase(df_tr)
@@ -321,7 +341,7 @@ model = DualHeadRanker(boat_in=boat_dim).to(device)
 opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=5e-5)
 
 
-# In[95]:
+# In[8]:
 
 
 def evaluate_model(model, dataset, device):
@@ -429,7 +449,7 @@ def evaluate_model(model, dataset, device):
 #     print("[diag]   ► finished quick diagnostics\n")
 
 
-# In[96]:
+# In[9]:
 
 
 EPOCHS = 20
@@ -517,16 +537,25 @@ for epoch in range(EPOCHS):
 writer.close()
 
 # modelの保存
+jcd_dict = {
+    '桐 生': '01', '戸 田': '02', '江戸川': '03', '平和島': '04', '多摩川': '05',
+    '浜名湖': '06', '蒲 郡': '07', '常 滑': '08', '津': '09',    '三 国': '10',
+    'びわこ': '11', '住之江': '12', '尼 崎': '13', '鳴 門': '14', '丸 亀': '15',
+    '児 島': '16',  '宮 島': '17',  '徳 山': '18',  '下 関': '19',  '若 松': '20',
+    '芦 屋':  '21',  '福 岡':  '22',  '唐 津':  '23',  '大 村':  '24'
+}
 now = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-os.makedirs("artifacts/models", exist_ok=True)
-model_path = f"artifacts/models/model_{now}.pth"
-model_path2 = f"../functions/models/model_{now}.pth"
+jcd = jcd_dict[venue]
+os.makedirs(f"artifacts/models/{jcd}", exist_ok=True)
+os.makedirs(f"../functions/models/{jcd}", exist_ok=True)
+model_path = f"artifacts/models/{jcd}/model_{now}.pth"
+model_path2 = f"../functions/models/{jcd}/model_{now}.pth"
 torch.save(model.state_dict(), model_path)
 torch.save(model.state_dict(), model_path2)
 print(f"Model saved to {model_path}")
 
 
-# In[97]:
+# In[10]:
 
 
 # ---- Monkey‑patch ROIAnalyzer so it uses BoatRaceDataset2 (MTL) ----------
@@ -566,7 +595,7 @@ print(f"[simulate] Loaded {len(df_recent)} rows ({start_date} – {today}).")
 print(f"columns: {', '.join(df_recent.columns)}")
 
 
-# In[98]:
+# In[ ]:
 
 
 class _RankOnly(nn.Module):

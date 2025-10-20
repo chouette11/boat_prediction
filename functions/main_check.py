@@ -8,7 +8,7 @@ import torch.nn as nn
 import pandas as pd
 import joblib  # scalerの保存・読み込みにjoblibを使うのが一般的です
 from sklearn.preprocessing import StandardScaler
-import beforeinfo_to_features as bf
+import beforeinfo_to_features_check as bf
 from roi_util import ROIPredictor
 from DualHeadRanker import DualHeadRanker
 import traceback
@@ -375,17 +375,37 @@ BEFORE_MINUTES = int(os.getenv("RACE_NOTIFY_BEFORE_MINUTES", "5"))
 
 #     return https_fn.Response(f"top_trifecta = {tri_df.iloc[0]['trifecta']}.", status=200)
 
+def is_hit_trio(pred_trifecta: str, true_trifecta: str) -> bool:
+    """3連単の予測と実際の結果を比較して、3連複が当たっているかどうかを判定する関数"""
+    pred_set = set(pred_trifecta.split('-'))
+    true_set = set(true_trifecta.split('-'))
+    return pred_set == true_set
+
+
+
 if __name__ == "__main__":
     import functions.sanrentan_util as su
     threshold_dict = {
-        "15": 0.30,  # 丸亀
+        "01": 0.16,  # 桐生
+        "07": 0.16,  # 蒲郡
+        "12": 0.10,  # 住之江
+        "15": 0.35,  # 丸亀
         "19": 0.22,  # 下関
         "20": 0.21,  # 若松
-        "24": 0.14,  # 大村
+        "24": 0.15,  # 大村
     }
-    dir_path = '../download/20_off_beforeinfo_pred_html'
+    jcd_name_dict = {
+        "01": "桐 生",
+        "07": "蒲 郡",
+        "12": "住之江",
+        "15": "丸 亀",
+        "19": "下 関",
+        "20": "若 松",
+        "24": "大 村",
+    }
+    dir_path = '../download/07_off_beforeinfo_pred_html'
     # 列名race_key,sanrentan,predを持つDataFrame
-    df = pd.DataFrame(columns=["race_key", "sanrentan", "pred", "pred_prob", "is_threshold"])
+    df = pd.DataFrame(columns=["race_key", "sanrentan", "pred", "pred_prob", "is_threshold", "trifecta_is_hit", "trio_is_hit", "trifecta_odds", "trio_odds"])
     for beforeinfo_filename in os.listdir(dir_path):
         html_path = os.path.join(dir_path, beforeinfo_filename)
         basename = os.path.basename(beforeinfo_filename).split('.')[0]
@@ -423,7 +443,7 @@ if __name__ == "__main__":
                 top_tri_prob = tri_df.iloc[0]['prob']
                 top_trifecta = tri_df.iloc[0]['trifecta']
                 threshold = threshold_dict.get(jcd)
-                csv_path = "../model/artifacts/若 松/eval_features_recent_若 松.csv"
+                csv_path = f"../model/artifacts/{jcd_name_dict.get(jcd)}/eval_features_recent_{jcd_name_dict.get(jcd)}.csv"
                 #hdをyyyy-mm-dd形式に変換
                 hd_formatted = f"{hd[:4]}-{hd[4:6]}-{hd[6:]}"
                 race_key = f"{hd_formatted}-{rno}-{jcd}"
@@ -436,6 +456,9 @@ if __name__ == "__main__":
                 df_true['pred_prob'] = top_tri_prob
                 # dfに追加
                 df = pd.concat([df, df_true], ignore_index=True)
+                df.at[df.index[-1], 'trifecta_is_hit'] = (df_true['sanrentan'].values[0] == top_trifecta)
+                df.at[df.index[-1], 'trio_is_hit'] = is_hit_trio(top_trifecta, df_true['sanrentan'].values[0])
+
                 if top_tri_prob > threshold:
                     print(f"[predict] {jcd}, {hd}, {rno}, Top Trifecta: {top_trifecta} with Probability: {top_tri_prob:.4f}\nhttps://www.boatrace.jp/owpc/pc/race/raceresult?rno={rno}&jcd={jcd}&hd={hd}")
                     df.at[df.index[-1], 'is_threshold'] = True
@@ -451,6 +474,6 @@ if __name__ == "__main__":
 
         # 予測結果をCSVファイルに保存
     now = datetime.now().strftime("%Y%m%d_%H%M%S")
-    df.to_csv(f'predictions_{now}.csv', index=False)
+    df.to_csv(f'{jcd}_predictions_{now}.csv', index=False)
 
 

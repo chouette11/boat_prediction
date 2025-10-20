@@ -6,6 +6,16 @@ import download_pred
 import wakamatsu_off_beforeinfo_html_to_csv
 from datetime import datetime, timedelta, timezone
 
+# --- utility: ensure all value_vars exist for pd.melt (prevents intermittent KeyError) ---
+def _ensure_value_vars(df: pd.DataFrame, cols: list[str], fill_value=pd.NA) -> list[str]:
+    missing = [c for c in cols if c not in df.columns]
+    if missing:
+        for c in missing:
+            df[c] = fill_value
+        # Optional debug log (remove if noisy)
+        print(f"[melt-guard] filled missing columns: {missing}")
+    return cols
+
 def create_race_key(df: pd.DataFrame) -> pd.Series:
     """
     stadium, race_date, race_noからユニークなrace_keyを生成する。
@@ -146,17 +156,33 @@ def create_pred_tf2_lane_stats(features_df: pd.DataFrame, filtered_course_df: pd
     id_vars = ['race_key']
     value_vars_racer = [f'lane{i}_racer_id' for i in range(1, 7)]
     value_vars_course = [f'lane{i}_bf_course' for i in range(1, 7)]
-    
-    df_racer = pd.melt(features_df, id_vars=id_vars, value_vars=value_vars_racer, var_name='lane_no_str_racer', value_name='reg_no')
-    df_course = pd.melt(features_df, id_vars=id_vars, value_vars=value_vars_course, var_name='lane_no_str_course', value_name='course')
+
+    # Ensure columns exist before melt (fill missing lanes with NA)
+    value_vars_racer = _ensure_value_vars(features_df, value_vars_racer)
+    value_vars_course = _ensure_value_vars(features_df, value_vars_course)
+
+    df_racer = pd.melt(
+        features_df,
+        id_vars=id_vars,
+        value_vars=value_vars_racer,
+        var_name='lane_no_str_racer',
+        value_name='reg_no'
+    )
+    df_course = pd.melt(
+        features_df,
+        id_vars=id_vars,
+        value_vars=value_vars_course,
+        var_name='lane_no_str_course',
+        value_name='course'
+    )
 
     df_racer['lane_no'] = df_racer['lane_no_str_racer'].str.extract(r'lane(\d)_').astype(int)
     df_course['lane_no'] = df_course['lane_no_str_course'].str.extract(r'lane(\d)_').astype(int)
-    
-    tf2_long = pd.merge(df_racer[['race_key', 'lane_no', 'reg_no']], 
-                        df_course[['race_key', 'lane_no', 'course']], 
+
+    tf2_long = pd.merge(df_racer[['race_key', 'lane_no', 'reg_no']],
+                        df_course[['race_key', 'lane_no', 'course']],
                         on=['race_key', 'lane_no'])
-    
+
     # --- ▼▼▼ ここから修正 ▼▼▼ ---
     # 結合キーに欠損値がある行を削除
     tf2_long.dropna(subset=['reg_no', 'course'], inplace=True)
@@ -165,18 +191,6 @@ def create_pred_tf2_lane_stats(features_df: pd.DataFrame, filtered_course_df: pd
     tf2_long['reg_no'] = tf2_long['reg_no'].astype(int)
     tf2_long['course'] = tf2_long['course'].astype(int)
     # --- ▲▲▲ ここまで修正 ▲▲▲ ---
-
-    # target_venues = features_df['jcd'].unique()
-
-    # # 2. 取得した会場コードのリストを使い、filtered_course_df を絞り込む
-    # #    .isin() を使うことで、「target_venuesリストに含まれるjcdを持つ行」だけを抽出できます。
-    # filtered_df = filtered_course_df[filtered_course_df['jcd'].isin(target_venues)]
-
-
-    # # --- 絞り込んだデータフレームを関数に渡す ---
-
-    # # 以前の filtered_course_df の代わりに、絞り込んだ filtered_df を渡します。
-    # pred_stats_df = create_pred_tf2_lane_stats(features_df, filtered_df)
 
     # 2. filtered_courseを結合
     merged_df = pd.merge(tf2_long, filtered_course_df, on=['reg_no', 'course'], how='left')
@@ -190,7 +204,7 @@ def create_pred_tf2_lane_stats(features_df: pd.DataFrame, filtered_course_df: pd
     )
     stats_pivot.columns = [f'lane{col[1]}_{col[0]}' for col in stats_pivot.columns]
     stats_pivot.reset_index(inplace=True)
-    
+
     return stats_pivot
 
 def rename_columns(df: pd.DataFrame, prefix: str) -> pd.DataFrame:

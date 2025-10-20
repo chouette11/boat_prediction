@@ -282,13 +282,13 @@ def check_race_notifications(req: https_fn.Request) -> https_fn.Response:
 def on_request_example(req: https_fn.Request) -> https_fn.Response:
     fs_notif_doc_id = req.get("fs_notif_doc_id")
     threshold_dict = {
-        "01": 0.16,  # 桐生
-        "07": 0.16,  # 蒲郡
-        "12": 0.10,  # 住之江
-        "15": 0.30,  # 丸亀
-        "19": 0.22,  # 下関
-        "20": 0.21,  # 若松
-        "24": 0.14,  # 大村
+        "01": (0.20, 0.30),  # 桐生
+        "07": (0.16, 0.28),  # 蒲郡
+        "12": (0.116, 0.20), # 住之江
+        "15": (0.35, 0.45),  # 丸亀
+        "19": (0.27, 0.40),  # 下関
+        "20": (0.22, 0.25),  # 若松
+        "24": (0.15, 0.22),  # 大村
     }
     features_df = bf.main(rno=req.get("rno"), jcd=req.get("jcd"))
     print(f"[predict] Features shape: {features_df.shape}")
@@ -320,7 +320,7 @@ def on_request_example(req: https_fn.Request) -> https_fn.Response:
     if not tri_df.empty:
         top_tri_prob = tri_df.iloc[0]['prob']
         top_trifecta = tri_df.iloc[0]['trifecta']
-        threshold = threshold_dict.get(req.get("jcd"))
+        threshold = threshold_dict.get(req.get("jcd"))[0]
         probs_dict = {}
         for i in range(10):
             probs_dict[tri_df.iloc[i]['trifecta']] = tri_df.iloc[i]['prob'] if i < len(tri_df) else None
@@ -329,7 +329,11 @@ def on_request_example(req: https_fn.Request) -> https_fn.Response:
             hd = req.get("hd")
             rno = req.get("rno")
             if jcd and hd and rno:
-                send_line_message(f"{jcd}, {hd}, {rno}, Top Trifecta: {top_trifecta} with Probability: {top_tri_prob:.4f}\nhttps://www.boatrace.jp/owpc/pc/race/raceresult?rno={rno}&jcd={jcd}&hd={hd}")
+                mes = ""
+                if jcd == "15":
+                    mes = "三連単"
+                max_prob = threshold_dict.get(jcd)[1]
+                send_line_message(f"{jcd}, {hd}, {rno}, Top Trifecta: {top_trifecta} Probability: {top_tri_prob:.4f} percent {(top_tri_prob/max_prob):.4f}\n{mes}\nhttps://www.boatrace.jp/owpc/pc/race/beforeinfo?rno={rno}&jcd={jcd}&hd={hd}")
                 print(f"[predict] Top Trifecta: {top_trifecta} with Probability: {top_tri_prob}")
                 try:
                     notif_doc_id = fs_notif_doc_id or f"{jcd}_{hd}_{rno}"

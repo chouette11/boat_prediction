@@ -74,28 +74,29 @@ def load_pytorch_model(jcd: str | None = None):
     if not key_candidates:
         raise KeyError("'boat_fc.weight' not found in state dict keys: " + ", ".join(state.keys()))
     w = state[key_candidates[0]]
-    boat_in_from_ckpt = w.shape[1]  # checkpoint input dim (in_features)
+    total_in_from_ckpt = int(w.shape[1])  # TOTAL input dim into boat_fc in the checkpoint
 
-    probe = DualHeadRanker(boat_in=boat_in_from_ckpt)
-    if not hasattr(probe, "boat_fc") or not hasattr(probe.boat_fc, "in_features"):
-        raise RuntimeError("DualHeadRanker must define boat_fc with in_features")
-    probe_in = int(probe.boat_fc.in_features)
-    target_in = int(boat_in_from_ckpt)
-    extra = probe_in - target_in
+    # Read lane embedding dim from a temporary instance (independent of boat_in)
+    _tmp = DualHeadRanker(boat_in=1)
+    lane_dim = int(_tmp.lane_emb.embedding_dim)
+    del _tmp
 
-    if extra > 0:
-        corrected_boat_in = target_in - extra
-        if corrected_boat_in <= 0:
-            raise RuntimeError(f"Computed corrected_boat_in={corrected_boat_in} is not positive (extra={extra}, target_in={target_in}).")
-        model = DualHeadRanker(boat_in=corrected_boat_in)
-    else:
-        model = DualHeadRanker(boat_in=boat_in_from_ckpt)
+    # Our class defines: boat_fc.in_features = boat_in + lane_dim
+    # So choose boat_in to make boat_fc.in_features match the checkpoint
+    boat_in = total_in_from_ckpt - lane_dim
+    if boat_in <= 0:
+        print(f"[load][WARN] ckpt in_features={total_in_from_ckpt} < lane_dim={lane_dim}; using boat_in={total_in_from_ckpt} (legacy arch?)")
+        boat_in = total_in_from_ckpt
 
-    print(f"[load] ({jcd or 'default'}) ckpt boat_fc.in_features={target_in}; class adds extra={extra}; using boat_in={model.boat_fc.in_features - max(extra,0)} → model.boat_fc.in_features={model.boat_fc.in_features}")
+    # Instantiate model to exactly match checkpoint's total in_features
+    model = DualHeadRanker(boat_in=boat_in)
+    print(f"[load] ({jcd or 'default'}) ckpt boat_fc.in_features(total)={total_in_from_ckpt}; lane_dim={lane_dim}; -> boat_in={boat_in}; model.boat_fc.in_features={model.boat_fc.in_features}")
 
+    # Strictly load weights
     model.load_state_dict(state, strict=True)
 
     model = model.to(DEVICE)
+
     rank_model = _RankOnly(model)
     return rank_model
 
@@ -333,7 +334,7 @@ def on_request_example(req: https_fn.Request) -> https_fn.Response:
                 if jcd == "15":
                     mes = "三連単"
                 max_prob = threshold_dict.get(jcd)[1]
-                send_line_message(f"{jcd}, {hd}, {rno}, Top Trifecta: {top_trifecta} Probability: {top_tri_prob:.4f} percent {(top_tri_prob/max_prob):.4f}\n{mes}\nhttps://www.boatrace.jp/owpc/pc/race/beforeinfo?rno={rno}&jcd={jcd}&hd={hd}")
+                send_line_message(f"{jcd}, {hd}, {rno}, Top Trifecta: {top_trifecta} Probability: {top_tri_prob:.4f} percent {(top_tri_prob-threshold)/(max_prob-threshold):.4f}\n{mes}\nhttps://www.boatrace.jp/owpc/pc/race/raceresult?rno={rno}&jcd={jcd}&hd={hd}")
                 print(f"[predict] Top Trifecta: {top_trifecta} with Probability: {top_tri_prob}")
                 try:
                     notif_doc_id = fs_notif_doc_id or f"{jcd}_{hd}_{rno}"

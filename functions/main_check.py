@@ -47,11 +47,12 @@ def load_pytorch_model(jcd):
 
     # 検索対象のディレクトリを場別→共通の順で決定
     search_dirs = []
+    yyyymm = datetime.now().strftime("%Y%m")
     if jcd:
-        jcd_models_dir = os.path.join("models", jcd)
+        jcd_models_dir = os.path.join(f"models_{yyyymm}", jcd)
         if os.path.isdir(jcd_models_dir):
             search_dirs.append(jcd_models_dir)
-    search_dirs.append("models")  # フォールバック
+    search_dirs.append(f"models_{yyyymm}")  # フォールバック
 
     model_path = None
     model_list = []
@@ -102,11 +103,12 @@ def load_pytorch_model(jcd):
 # スケーラー読み込み（場ごと対応）
 def load_scaler(jcd):
     search_dirs = []
+    yyyymm = datetime.now().strftime("%Y%m")
     if jcd:
-        jcd_scalers_dir = os.path.join("scalers", jcd)
+        jcd_scalers_dir = os.path.join(f"scalers_{yyyymm}", jcd)
         if os.path.isdir(jcd_scalers_dir):
             search_dirs.append(jcd_scalers_dir)
-    search_dirs.append("scalers")  # フォールバック
+    search_dirs.append(f"scalers_{yyyymm}")  # フォールバック
 
     scaler_path = None
     for d in search_dirs:
@@ -145,8 +147,16 @@ def send_line_message(text: str) -> None:
 MODEL_CACHE: dict[str, nn.Module] = {}
 SCALER_CACHE: dict[str, StandardScaler] = {}
 PREDICTOR_CACHE: dict[str, ROIPredictor] = {}
+SANRENTAN_RESULT_CACHE: dict[str, pd.DataFrame] = {}
 
 NUM_COLS = ["air_temp", "wind_speed", "wave_height", "water_temp", "wind_sin", "wind_cos"]
+
+# Columns to exclude from features for all races
+EXCLUDE_COLS = [
+    f"lane{lane}_{suffix}"
+    for lane in range(1, 7)
+    for suffix in ("bf_course", "bf_st_time", "weight")
+]
 
 
 def get_predictor_for_jcd(jcd) -> ROIPredictor:
@@ -194,187 +204,6 @@ except Exception as e:
 # 通知の実行タイミング（締切何分前か）を環境変数で設定
 BEFORE_MINUTES = int(os.getenv("RACE_NOTIFY_BEFORE_MINUTES", "5"))
 
-# @https_fn.on_request(memory=MemoryOption.GB_2)
-# def check_race_notifications(req: https_fn.Request) -> https_fn.Response:
-#     """
-#     Cloud Scheduler 等から定期的に呼び出されるハンドラー。
-#     現在時刻がレース締切の BEFORE_MINUTES 分前〜締切時刻までの範囲に入っていれば
-#     on_request_example(None) を実行してLINE通知を行う。
-#     """
-#     for i in (15, 19, 20, 24):
-#         jcd = f"0{i}" if i < 10 else str(i)
-#         # --- 1日1回だけダウンロードするための日次キャッシュ（Firestore） ---
-#         jst = timezone(timedelta(hours=9))
-#         now_jst = datetime.now(jst)
-#         today_hd = now_jst.strftime("%Y%m%d")
-#         daily_doc_id = f"{jcd}_{today_hd}"
-
-#         # まずは Firestore の日次キャッシュを試す
-#         closing_times = None
-#         try:
-#             daily_doc = DB.collection("closing_time_daily").document(daily_doc_id).get()
-#             if daily_doc.exists:
-#                 payload = daily_doc.to_dict()
-#                 closing_times = payload.get("items") or []
-#                 print(f"[cache] Using cached closing times for {daily_doc_id} (count={len(closing_times)})")
-#         except Exception as e:
-#             print(f"[firestore] failed to read daily cache for {daily_doc_id}: {e}")
-
-#         # キャッシュが無ければダウンロード → Firestore に保存
-#         if not closing_times:
-#             try:
-#                 closing_times = get_limit.extract_closing_times(jcd=jcd)
-#                 DB.collection("closing_time_daily").document(daily_doc_id).set({
-#                     "jcd": jcd,
-#                     "hd": today_hd,
-#                     "count": len(closing_times),
-#                     "items": closing_times,
-#                     "fetchedAt": firestore.SERVER_TIMESTAMP,
-#                 }, merge=True)
-#                 print(f"[fetch] Downloaded and cached closing times for {daily_doc_id} (count={len(closing_times)})")
-#             except Exception as e:
-#                 msg = f"[check] Failed to fetch closing times: {e}"
-#                 print(msg)
-#                 return https_fn.Response(msg, status=500)
-#         print('ナウ', now_jst.isoformat())
-#         print('締切一覧', closing_times)
-#         for item in closing_times:
-#             if item == "Not held":
-#                 continue
-#             iso = item.get("iso_jst")
-#             rno = item.get("rno")
-
-#             # Firestore: upsert closing time document
-#             doc_id = f"{item.get('jcd')}_{item.get('hd')}_{item.get('rno')}"
-
-#             if not iso:
-#                 continue
-#             dt = datetime.fromisoformat(iso)         # JST(+09:00) のawareなdatetime
-#             now_tz = now_jst.replace(tzinfo=dt.tzinfo)
-#             notify_start = dt - timedelta(minutes=BEFORE_MINUTES)
-
-#             # Firestore: skip if already notified for this race
-#             notif_doc_id = doc_id
-#             try:
-#                 notif_doc = DB.collection("race_notifications").document(notif_doc_id).get()
-#                 if notif_doc.exists and notif_doc.to_dict().get("sent"):
-#                     print(f"[check] Already notified for {notif_doc_id}; skipping.")
-#                     continue
-#             except Exception as e:
-#                 print(f"[firestore] notification doc read failed for {notif_doc_id}: {e}")
-
-#             print(notify_start, now_tz, dt, rno)
-
-#             if notify_start <= now_tz <= dt:
-#                 req = {
-#                     "jcd": item.get("jcd"),
-#                     "hd": item.get("hd"),
-#                     "rno": rno,
-#                     "closing_time": iso,
-#                     "fs_notif_doc_id": notif_doc_id,
-#                 }
-#                 on_request_example(req)              # 予測とLINE送信を実行
-
-#     return https_fn.Response("End check", status=200)
-
-# # --- HTTPリクエストを処理する関数 ---
-# @https_fn.on_request(memory=MemoryOption.GB_2)
-# def on_request_example(req: https_fn.Request) -> https_fn.Response:
-#     fs_notif_doc_id = req.get("fs_notif_doc_id")
-#     threshold_dict = {
-#         "15": 0.30,  # 丸亀
-#         "19": 0.22,  # 下関
-#         "20": 0.21,  # 若松
-#         "24": 0.14,  # 大村
-#     }
-#     features_df = bf.main(rno=req.get("rno"), jcd=req.get("jcd"))
-#     print(f"[predict] Features shape: {features_df.shape}")
-#     if features_df.empty:
-#         print("[predict] No rows fetched for the specified period.")
-
-#     exclude = []
-#     for lane in range(1, 7):
-#         # 実際に存在するカラム名に合わせてください
-#         exclude.append(f"lane{lane}_bf_course")
-#         exclude.append(f"lane{lane}_bf_st_time")
-#         exclude.append(f"lane{lane}_weight")
-#         # 他にも学習時に使っていない特徴量があれば追加
-
-#     # errors='ignore' をつけて、存在しない列があってもエラーにならないようにする
-#     features_df.drop(columns=exclude, inplace=True, errors="ignore")
-
-#     # ★ 場ごとのPREDICTORを取得して使用する
-#     predictor = get_predictor_for_jcd(req.get("jcd"))
-#     pred_scores_df = predictor.predict_scores(features_df, include_meta=True)
-#     pred_probs_df = predictor.predict_win_probs(scores_df=pred_scores_df, include_meta=True)
-#     exa_df, tri_df = predictor.predict_exotics_topk(scores_df=pred_scores_df, K=10, tau=1.0, include_meta=True)
-#     print(f"[predict] Prediction completed. Scores shape: {pred_scores_df.shape}, Win probs shape: {pred_probs_df.shape}")
-#     print(f"[predict] Example Scores:\n{pred_scores_df.head()}")
-#     print(f"[predict] Example Win Probs:\n{pred_probs_df.head()}")
-#     print(f"[predict] Example Exactas:\n{exa_df.head()}")
-#     print(f"[predict] Example Trifectas:\n{tri_df.head()}")
-#     # tri_dfのprob列の1行目を取得
-#     if not tri_df.empty:
-#         top_tri_prob = tri_df.iloc[0]['prob']
-#         top_trifecta = tri_df.iloc[0]['trifecta']
-#         threshold = threshold_dict.get(req.get("jcd"))
-#         probs_dict = {}
-#         for i in range(10):
-#             probs_dict[tri_df.iloc[i]['trifecta']] = tri_df.iloc[i]['prob'] if i < len(tri_df) else None
-#         if top_tri_prob > threshold:
-#             jcd = req.get("jcd")
-#             hd = req.get("hd")
-#             rno = req.get("rno")
-#             if jcd and hd and rno:
-#                 send_line_message(f"{jcd}, {hd}, {rno}, Top Trifecta: {top_trifecta} with Probability: {top_tri_prob:.4f}\nhttps://www.boatrace.jp/owpc/pc/race/raceresult?rno={rno}&jcd={jcd}&hd={hd}")
-#                 print(f"[predict] Top Trifecta: {top_trifecta} with Probability: {top_tri_prob}")
-#                 try:
-#                     notif_doc_id = fs_notif_doc_id or f"{jcd}_{hd}_{rno}"
-#                     DB.collection("race_notifications").document(notif_doc_id).set({
-#                         "jcd": jcd,
-#                         "hd": hd,
-#                         "rno": rno,
-#                         "closing_time": req.get("closing_time"),
-#                         "sent": True,
-#                         "sentAt": firestore.SERVER_TIMESTAMP,
-#                         "tri": top_trifecta,
-#                         "prob": float(top_tri_prob),
-#                         "result_url": f"https://www.boatrace.jp/owpc/pc/race/raceresult?rno={rno}&jcd={jcd}&hd={hd}",
-#                         "features": features_df.to_dict(orient="records"),
-#                         "probs_dict": probs_dict,
-#                     }, merge=True)
-#                 except Exception as e:
-#                     print(f"[firestore] failed to mark notification sent for {notif_doc_id}: {e}")
-#         else:
-#             jcd = req.get("jcd")
-#             hd = req.get("hd")
-#             rno = req.get("rno")
-#             try:
-#                 doc_id = fs_notif_doc_id or f"{jcd}_{hd}_{rno}"
-#                 DB.collection("race_notifications").document(doc_id).set({
-#                     "jcd": jcd,
-#                     "hd": hd,
-#                     "rno": rno,
-#                     "closing_time": req.get("closing_time"),
-#                     "sent": False,
-#                     "lastEvaluatedAt": firestore.SERVER_TIMESTAMP,
-#                     "tri": top_trifecta,
-#                     "topTriProb": float(top_tri_prob),
-#                     "result_url": f"https://www.boatrace.jp/owpc/pc/race/raceresult?rno={rno}&jcd={jcd}&hd={hd}",
-#                     "features": features_df.to_dict(orient="records"),
-#                     "probs_dict": probs_dict,
-#                 }, merge=True)
-#             except Exception as e:
-#                 print(f"[firestore] failed to update evaluation for {doc_id}: {e}")
-#             print("[predict] Top trifecta probability is below threshold; no notification sent.")
-#     else:
-#         print("[predict] No trifecta predictions available.")
-
-#     # TODO: 予測結果をDBに保存したり、レスポンスとして返したりする処理
-#     print("Prediction completed successfully.")
-
-#     return https_fn.Response(f"top_trifecta = {tri_df.iloc[0]['trifecta']}.", status=200)
-
 def is_hit_trio(pred_trifecta: str, true_trifecta: str) -> bool:
     """3連単の予測と実際の結果を比較して、3連複が当たっているかどうかを判定する関数"""
     pred_set = set(pred_trifecta.split('-'))
@@ -386,12 +215,12 @@ def is_hit_trio(pred_trifecta: str, true_trifecta: str) -> bool:
 if __name__ == "__main__":
     import functions.sanrentan_util as su
     threshold_dict = {
-        "01": 0.16,  # 桐生
+        "01": 0.20,  # 桐生
         "07": 0.16,  # 蒲郡
-        "12": 0.10,  # 住之江
+        "12": 0.116,  # 住之江
         "15": 0.35,  # 丸亀
-        "19": 0.22,  # 下関
-        "20": 0.21,  # 若松
+        "19": 0.27,  # 下関
+        "20": 0.22,  # 若松
         "24": 0.15,  # 大村
     }
     jcd_name_dict = {
@@ -403,9 +232,9 @@ if __name__ == "__main__":
         "20": "若 松",
         "24": "大 村",
     }
-    dir_path = '../download/07_off_beforeinfo_pred_html'
-    # 列名race_key,sanrentan,predを持つDataFrame
-    df = pd.DataFrame(columns=["race_key", "sanrentan", "pred", "pred_prob", "is_threshold", "trifecta_is_hit", "trio_is_hit", "trifecta_odds", "trio_odds"])
+    dir_path = '../download/01_off_beforeinfo_pred_html'
+    # 行ごとの結果を一時的に保持するリスト（最後に一括でconcatしてO(n^2)を回避）
+    result_rows: list[pd.DataFrame] = []
     for beforeinfo_filename in os.listdir(dir_path):
         html_path = os.path.join(dir_path, beforeinfo_filename)
         basename = os.path.basename(beforeinfo_filename).split('.')[0]
@@ -417,20 +246,10 @@ if __name__ == "__main__":
         if features_df is None or features_df.empty:
             print(f"[predict] No features generated for jcd={jcd}, hd={hd}, rno={rno}. Skipping.")
             continue
-        print(f"[predict] Features shape: {features_df.shape}")
-        if features_df.empty:
-            print("[predict] No rows fetched for the specified period.")
-
-        exclude = []
-        for lane in range(1, 7):
-            # 実際に存在するカラム名に合わせてください
-            exclude.append(f"lane{lane}_bf_course")
-            exclude.append(f"lane{lane}_bf_st_time")
-            exclude.append(f"lane{lane}_weight")
-            # 他にも学習時に使っていない特徴量があれば追加
+        # print(f"[predict] Features shape: {features_df.shape}")
 
         # errors='ignore' をつけて、存在しない列があってもエラーにならないようにする
-        features_df.drop(columns=exclude, inplace=True, errors="ignore")
+        features_df.drop(columns=EXCLUDE_COLS, inplace=True, errors="ignore")
 
         try:
             # ★ 場ごとのPREDICTORを取得して使用する
@@ -444,26 +263,36 @@ if __name__ == "__main__":
                 top_trifecta = tri_df.iloc[0]['trifecta']
                 threshold = threshold_dict.get(jcd)
                 csv_path = f"../model/artifacts/{jcd_name_dict.get(jcd)}/eval_features_recent_{jcd_name_dict.get(jcd)}.csv"
-                #hdをyyyy-mm-dd形式に変換
+                # hdをyyyy-mm-dd形式に変換
                 hd_formatted = f"{hd[:4]}-{hd[4:6]}-{hd[6:]}"
                 race_key = f"{hd_formatted}-{rno}-{jcd}"
                 print(f"[predict] Race Key: {race_key}")
-                df_true = su.get_sanrentan_by_race_key(csv_path, race_key)
-                print(f"[predict] Top Trifecta: {top_trifecta} with Probability: {top_tri_prob}")
-                print(df_true)
-                # df_trueにpred列を追加
-                df_true['pred'] = top_trifecta
-                df_true['pred_prob'] = top_tri_prob
-                # dfに追加
-                df = pd.concat([df, df_true], ignore_index=True)
-                df.at[df.index[-1], 'trifecta_is_hit'] = (df_true['sanrentan'].values[0] == top_trifecta)
-                df.at[df.index[-1], 'trio_is_hit'] = is_hit_trio(top_trifecta, df_true['sanrentan'].values[0])
 
+                cache_key = jcd
+                if cache_key not in SANRENTAN_RESULT_CACHE:
+                    # 一度だけCSVを読み、sanrentanテーブルを作成してキャッシュ
+                    src_df = su._ensure_dataframe(csv_path)
+                    sanrentan_df = su.compute_sanrentan(src_df)[["race_key", "sanrentan"]].drop_duplicates("race_key")
+                    SANRENTAN_RESULT_CACHE[cache_key] = sanrentan_df
+
+                sanrentan_df = SANRENTAN_RESULT_CACHE[cache_key]
+                df_true = sanrentan_df.loc[sanrentan_df["race_key"] == race_key].reset_index(drop=True)
+                # print(f"[predict] Top Trifecta: {top_trifecta} with Probability: {top_tri_prob}")
+                # print(df_true)
+
+                # df_true を元に1レース分の行データを構築し、リストに貯めておく
+                row = df_true.copy()
+                row['pred'] = top_trifecta
+                row['pred_prob'] = top_tri_prob
+                row['trifecta_is_hit'] = (df_true['sanrentan'].values[0] == top_trifecta)
+                row['trio_is_hit'] = is_hit_trio(top_trifecta, df_true['sanrentan'].values[0])
+
+                # is_threshold は従来通り、条件を満たしたときだけ True を立て、それ以外はNaNのまま
                 if top_tri_prob > threshold:
-                    print(f"[predict] {jcd}, {hd}, {rno}, Top Trifecta: {top_trifecta} with Probability: {top_tri_prob:.4f}\nhttps://www.boatrace.jp/owpc/pc/race/raceresult?rno={rno}&jcd={jcd}&hd={hd}")
-                    df.at[df.index[-1], 'is_threshold'] = True
-                else:
-                    pass  # しきい値未満の場合は何もしない
+                    # print(f"[predict] {jcd}, {hd}, {rno}, Top Trifecta: {top_trifecta} with Probability: {top_tri_prob:.4f}\nhttps://www.boatrace.jp/owpc/pc/race/raceresult?rno={rno}&jcd={jcd}&hd={hd}")
+                    row['is_threshold'] = True
+
+                result_rows.append(row)
             else:
                 print("[predict] No trifecta predictions available.")
         except Exception as e:
@@ -472,7 +301,16 @@ if __name__ == "__main__":
             _tb.print_exc()
             continue
 
-        # 予測結果をCSVファイルに保存
+    # 予測結果を一括でDataFrameに変換し、元の列順を維持してCSVに保存
+    output_columns = ["race_key", "sanrentan", "pred", "pred_prob", "is_threshold",
+                      "trifecta_is_hit", "trio_is_hit", "trifecta_odds", "trio_odds"]
+    if result_rows:
+        df = pd.concat(result_rows, ignore_index=True)
+        # 不足カラムはNaNで補完しつつ、元の列順に揃える
+        df = df.reindex(columns=output_columns)
+    else:
+        df = pd.DataFrame(columns=output_columns)
+
     now = datetime.now().strftime("%Y%m%d_%H%M%S")
     df.to_csv(f'{jcd}_predictions_{now}.csv', index=False)
 

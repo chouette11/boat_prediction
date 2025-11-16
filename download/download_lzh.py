@@ -34,7 +34,7 @@ def download_one(url: str, out_path: str, timeout=20):
 
 def bulk_fetch(start="2025-09-01", end=None, kinds=("results","programs"), workers=8):
     if end is None:
-        end = dt.date(2025, 9, 30).isoformat()
+        end =  (dt.date.today() - dt.timedelta(days=30)).isoformat()
     s = dt.date.fromisoformat(start); e = dt.date.fromisoformat(end)
     futures = []
     with ThreadPoolExecutor(max_workers=workers) as ex:

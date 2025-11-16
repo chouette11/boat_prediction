@@ -1,3 +1,4 @@
+
 import pandas as pd
 import numpy as np
 import datetime
@@ -5,6 +6,9 @@ import re
 import download_pred
 import wakamatsu_off_beforeinfo_html_to_csv
 from datetime import datetime, timedelta, timezone
+ # グローバルキャッシュ・フラグ
+FILTERED_COURSE_DF: pd.DataFrame = None
+DEBUG_BEFOREINFO = False
 
 def create_race_key(df: pd.DataFrame) -> pd.Series:
     """
@@ -252,12 +256,20 @@ def main(rno: int, jcd: str, path: str=None) -> pd.DataFrame:
             # with open(html_path, 'r', encoding='utf-8') as file:
             #     html = file.read()
             beforeinfo_df, weather_df, meta_df = wakamatsu_off_beforeinfo_html_to_csv.parse_boat_race_html(html, is_pred=True)
-        print(beforeinfo_df.head())
-        print(weather_df.head())
+
+        if DEBUG_BEFOREINFO:
+            print(beforeinfo_df.head())
+            print(weather_df.head())
+
         if beforeinfo_df.empty or weather_df.empty or meta_df.empty:
             print("⚠️ 必要なデータが取得できませんでした。処理を終了します。")
             return pd.DataFrame()  # 空のDataFrameを返す
-        filtered_course_df = pd.read_csv('filtered_course.csv')
+
+        # filtered_course.csv の読み込みをグローバルに1回だけ行い、以降はメモリ上のキャッシュを使う
+        global FILTERED_COURSE_DF
+        if FILTERED_COURSE_DF is None:
+            FILTERED_COURSE_DF = pd.read_csv('filtered_course.csv')
+
         studium = meta_df.iloc[0]['place']
         beforeinfo_df['race_no'] = rno
         beforeinfo_df['stadium'] = studium
@@ -265,9 +277,12 @@ def main(rno: int, jcd: str, path: str=None) -> pd.DataFrame:
         weather_df['stadium'] = studium
         weather_df['race_date'] = today
         weather_df['race_no'] = rno
-        filtered_course_df = filtered_course_df[filtered_course_df['stadium'] == studium]
+
+        # 元のロジック通り、場でフィルタしたデータフレームを使用する（グローバルDF自体は変えない）
+        filtered_course_df = FILTERED_COURSE_DF[FILTERED_COURSE_DF['stadium'] == studium]
         # filtered_course_df.to_csv('filtered_course_若松.csv', index=False)
-        print(filtered_course_df.head())
+        if DEBUG_BEFOREINFO:
+            print(filtered_course_df.head())
     except FileNotFoundError as e:
         print(f"エラー: {e}")
         print("必要なCSVファイル（beforeinfo.csv, weather.csv, filtered_course.csv）をコードと同じディレクトリに配置してください。")

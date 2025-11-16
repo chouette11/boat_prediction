@@ -1,4 +1,4 @@
-DB_NAME      := all_1
+DB_NAME      := all_202510
 DB_USER      := keiichiro
 DB_HOST      := localhost
 
@@ -75,7 +75,12 @@ initalldb:
 	python sql/confirm.py
 
 .PHONY: rebuild_alldb
-rebuild_alldb:	
+rebuild_alldb:
+
+	# ④ データを流し込む
+	python sql/parse_programs.py
+	python sql/parse_results.py
+		
 	# ⑤ マイグレーションを実行
 	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql/04_functions.sql
 
@@ -117,6 +122,15 @@ base_to_ipynb:
 	# Jupyter Notebookに変換
 	jupytext model/main_base.py --to notebook
 
+.PHONY: real_to_ipynb
+real_to_ipynb:
+	# Jupyter Notebookに変換
+	jupytext model/main_base_real.py --to notebook
+
+.PHONY: comp_to_ipynb
+comp_to_ipynb:
+	# Jupyter Notebookに変換
+	jupytext model/main_comp.py --to notebook
 
 .PHONY: tensorboard
 tensorboard:

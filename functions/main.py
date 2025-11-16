@@ -14,6 +14,7 @@ from DualHeadRanker import DualHeadRanker
 import traceback
 import get_limit
 from datetime import datetime, timedelta, timezone
+import result_html_to_message
 
 # --- Global inference options ---
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -47,11 +48,12 @@ def load_pytorch_model(jcd: str | None = None):
 
     # 検索対象のディレクトリを場別→共通の順で決定
     search_dirs = []
+    yyyymm  = datetime.now().strftime("%Y%m")
     if jcd:
-        jcd_models_dir = os.path.join("models", jcd)
+        jcd_models_dir = os.path.join(f"models_{yyyymm}", jcd)
         if os.path.isdir(jcd_models_dir):
             search_dirs.append(jcd_models_dir)
-    search_dirs.append("models")  # フォールバック
+    search_dirs.append(f"models_{yyyymm}")  # フォールバック
 
     model_path = None
     model_list = []
@@ -103,11 +105,12 @@ def load_pytorch_model(jcd: str | None = None):
 # スケーラー読み込み（場ごと対応）
 def load_scaler(jcd: str | None = None):
     search_dirs = []
+    yyyymm  = datetime.now().strftime("%Y%m")
     if jcd:
-        jcd_scalers_dir = os.path.join("scalers", jcd)
+        jcd_scalers_dir = os.path.join(f"scalers_{yyyymm}", jcd)
         if os.path.isdir(jcd_scalers_dir):
             search_dirs.append(jcd_scalers_dir)
-    search_dirs.append("scalers")  # フォールバック
+    search_dirs.append(f"scalers_{yyyymm}")  # フォールバック
 
     scaler_path = None
     for d in search_dirs:
@@ -382,3 +385,117 @@ def on_request_example(req: https_fn.Request) -> https_fn.Response:
     print("Prediction completed successfully.")
 
     return https_fn.Response(f"top_trifecta = {tri_df.iloc[0]['trifecta']}.", status=200)
+
+JST = timezone(timedelta(hours=9))
+
+# === 日次サマリ通知エンドポイント ===
+@https_fn.on_request(memory=MemoryOption.GB_2)
+def send_daily_summary(req: https_fn.Request) -> https_fn.Response:
+    """
+    既定: 昨日(JST)の結果を通知。
+    かつ、昨日が日曜日なら週次サマリ（Mon–Sun）を、月末なら月次サマリ（当月1日〜昨日）を追加で通知。
+    ?hd=YYYYMMDD を指定した場合はその日を基準日とする（force再送は ?force=true）。
+    """
+    try:
+        # パラメータ
+        hd = None
+        force = False
+        try:
+            hd = req.get("hd")
+            force = str(req.get("force")).lower() in ("1", "true", "yes")
+        except Exception:
+            pass
+
+        now_jst = datetime.now(JST)
+        if hd:
+            try:
+                target_date = datetime.strptime(hd, "%Y%m%d").date()
+            except Exception:
+                return https_fn.Response(f"invalid hd: {hd}", status=400)
+        else:
+            # 既定は「昨日」
+            target_date = (now_jst - timedelta(days=1)).date()
+            hd = target_date.strftime("%Y%m%d")
+
+        # 重複送信ガード
+        summary_doc_ref = DB.collection("daily_summaries").document(hd)
+        already = False
+        try:
+            snap = summary_doc_ref.get()
+            if snap.exists and snap.to_dict().get("sent") and not force:
+                already = True
+        except Exception as e:
+            print(f"[firestore] failed to read daily_summaries/{hd}: {e}")
+
+        messages = []
+
+        # --- 日次（昨日） ---
+        if not already or force:
+            # HTMLダウンロード・抽出は result_html_to_message に委譲
+            summary, message = result_html_to_message.daily_main(hd, DB)
+            messages.append(message)
+
+            # 送信
+            try:
+                send_line_message(message)
+            except Exception as e:
+                print(f"[LINE] daily summary send failed: {e}")
+
+            # Firestore 保存
+            try:
+                summary_doc_ref.set({**summary, "hd": hd, "sent": True}, merge=True)
+            except Exception as e:
+                print(f"[firestore] failed to write daily_summaries/{hd}: {e}")
+        else:
+            messages.append(f"[daily] {hd} は既に送信済みです。?force=true で再送できます。")
+
+        # --- 週次（昨日が日曜日なら Mon–Sun） ---
+        if target_date.weekday() == 6:
+            week_start = target_date - timedelta(days=6)
+            week_end = target_date
+            wsum, wmsg = result_html_to_message.weekly_main(week_start, week_end, DB)
+            messages.append(wmsg)
+            try:
+                send_line_message(wmsg)
+            except Exception as e:
+                print(f"[LINE] weekly summary send failed: {e}")
+            try:
+                DB.collection("weekly_summaries").document(
+                    f"{week_start.strftime('%Y%m%d')}_{week_end.strftime('%Y%m%d')}"
+                ).set({
+                    **wsum,
+                    "hd_from": week_start.strftime("%Y%m%d"),
+                    "hd_to": week_end.strftime("%Y%m%d"),
+                    "sent": True,
+                }, merge=True)
+            except Exception as e:
+                print(f"[firestore] failed to write weekly_summaries: {e}")
+
+        # --- 月次（昨日が月末なら 1日〜昨日） ---
+        if (target_date + timedelta(days=1)).month != target_date.month:
+            month_start = target_date.replace(day=1)
+            month_end = target_date
+            msum, mmsg = result_html_to_message.monthly_main(month_start, month_end, DB)
+            messages.append(mmsg)
+            try:
+                send_line_message(mmsg)
+            except Exception as e:
+                print(f"[LINE] monthly summary send failed: {e}")
+            try:
+                DB.collection("monthly_summaries").document(
+                    f"{month_start.strftime('%Y%m')}"
+                ).set({
+                    **msum,
+                    "ym": month_start.strftime("%Y%m"),
+                    "hd_from": month_start.strftime("%Y%m%d"),
+                    "hd_to": month_end.strftime("%Y%m%d"),
+                    "sent": True,
+                }, merge=True)
+            except Exception as e:
+                print(f"[firestore] failed to write monthly_summaries: {e}")
+
+        return https_fn.Response("\n\n".join(messages), status=200)
+
+    except Exception as e:
+        traceback.print_exc()
+        return https_fn.Response(f"daily summary failed: {e}", status=500)

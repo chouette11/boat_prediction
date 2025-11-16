@@ -18,9 +18,7 @@ from bs4 import BeautifulSoup
 
 def parse_boat_race_html(html_content: str, encoding: str = "utf-8", is_pred: bool = False) -> None:
     """BOAT RACE の『直前情報』ページ（PC 向け）からデータを抽出し CSV を生成する"""
-    print(html_content[:100])  # HTMLの一部を表示して確認
     soup = BeautifulSoup(html_content, "html.parser")
-    print(f"soup.title: {soup.title.get_text(strip=True)}")
 
     main_label = soup.select_one(".heading1_mainLabel").get_text(strip=True) if soup.select_one(".heading1_mainLabel") else None
     if main_label and "データがありません" in main_label or main_label and "エラー" in main_label:

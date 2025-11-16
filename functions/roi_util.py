@@ -14,9 +14,6 @@ from itertools import permutations
 
 
 # --- constants ------------------------------------------------------------
-UNIT_JPY = 100             # 1 "bet unit" = 100 JPY (競艇の最低賭け金)
-
-
 class ROIAnalyzer:
     def __init__(self, model, scaler, num_cols: List[str], device: str = "cpu", batch_size: int = 512):
         self.model = model

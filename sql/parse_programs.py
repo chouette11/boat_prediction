@@ -360,8 +360,8 @@ def main():
     
     # Collect files
     files = []
-    dir_path = 'download/txt/programs/2025/09'
-    schema_path = 'sql2/02_boat_programs_schema.sql'
+    dir_path = f'download/txt/programs'
+    schema_path = 'sql/02_boat_programs_schema.sql'
     root = Path(dir_path)
     if not root.exists() or not root.is_dir():
         print(f"[WARN] --dir not found or not a directory: {root}", file=sys.stderr)

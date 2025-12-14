@@ -49,10 +49,10 @@ def load_pytorch_model(jcd):
     search_dirs = []
     yyyymm = datetime.now().strftime("%Y%m")
     if jcd:
-        jcd_models_dir = os.path.join(f"models_{yyyymm}", jcd)
+        jcd_models_dir = os.path.join(f"models", jcd)
         if os.path.isdir(jcd_models_dir):
             search_dirs.append(jcd_models_dir)
-    search_dirs.append(f"models_{yyyymm}")  # フォールバック
+    search_dirs.append(f"models")  # フォールバック
 
     model_path = None
     model_list = []
@@ -105,10 +105,10 @@ def load_scaler(jcd):
     search_dirs = []
     yyyymm = datetime.now().strftime("%Y%m")
     if jcd:
-        jcd_scalers_dir = os.path.join(f"scalers_{yyyymm}", jcd)
+        jcd_scalers_dir = os.path.join(f"scalers", jcd)
         if os.path.isdir(jcd_scalers_dir):
             search_dirs.append(jcd_scalers_dir)
-    search_dirs.append(f"scalers_{yyyymm}")  # フォールバック
+    search_dirs.append(f"scalers")  # フォールバック
 
     scaler_path = None
     for d in search_dirs:
@@ -232,7 +232,7 @@ if __name__ == "__main__":
         "20": "若 松",
         "24": "大 村",
     }
-    dir_path = '../download/01_off_beforeinfo_pred_html'
+    dir_path = '../download/24_off_beforeinfo_pred_html'
     # 行ごとの結果を一時的に保持するリスト（最後に一括でconcatしてO(n^2)を回避）
     result_rows: list[pd.DataFrame] = []
     for beforeinfo_filename in os.listdir(dir_path):
@@ -242,6 +242,9 @@ if __name__ == "__main__":
         rno = f'{rno}' if rno >= 10 else f'0{rno}'
         jcd = basename.split('_')[-3]         # ファイル名からjcdを
         hd = basename.split('_')[-2]         # ファイル名からhdを
+        # 202510以前の場合スキップ
+        if int(hd) <= 20251031:
+            continue
         features_df = bf.main(rno=rno, jcd=jcd, path=html_path)
         if features_df is None or features_df.empty:
             print(f"[predict] No features generated for jcd={jcd}, hd={hd}, rno={rno}. Skipping.")
@@ -313,5 +316,8 @@ if __name__ == "__main__":
 
     now = datetime.now().strftime("%Y%m%d_%H%M%S")
     df.to_csv(f'{jcd}_predictions_{now}.csv', index=False)
+
+    import merge_odds as mo
+    mo.main(result_path=f'{jcd}_predictions_{now}.csv')
 
 

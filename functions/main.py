@@ -50,10 +50,10 @@ def load_pytorch_model(jcd: str | None = None):
     search_dirs = []
     yyyymm  = datetime.now().strftime("%Y%m")
     if jcd:
-        jcd_models_dir = os.path.join(f"models_{yyyymm}", jcd)
+        jcd_models_dir = os.path.join(f"models", jcd)
         if os.path.isdir(jcd_models_dir):
             search_dirs.append(jcd_models_dir)
-    search_dirs.append(f"models_{yyyymm}")  # フォールバック
+    search_dirs.append(f"models")  # フォールバック
 
     model_path = None
     model_list = []
@@ -107,10 +107,10 @@ def load_scaler(jcd: str | None = None):
     search_dirs = []
     yyyymm  = datetime.now().strftime("%Y%m")
     if jcd:
-        jcd_scalers_dir = os.path.join(f"scalers_{yyyymm}", jcd)
+        jcd_scalers_dir = os.path.join(f"scalers", jcd)
         if os.path.isdir(jcd_scalers_dir):
             search_dirs.append(jcd_scalers_dir)
-    search_dirs.append(f"scalers_{yyyymm}")  # フォールバック
+    search_dirs.append(f"scalers")  # フォールバック
 
     scaler_path = None
     for d in search_dirs:

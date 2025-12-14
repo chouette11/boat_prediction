@@ -31,6 +31,35 @@ def merge_odds(eval_df, result_df):
     merged_df = pd.merge(result_df, odds_df, on="race_key", how="left")
     return merged_df
 
+def main(result_path: str):
+    jcd_name_dict = {
+        "01": "桐 生",
+        "07": "蒲 郡",
+        "12": "住之江",
+        "15": "丸 亀",
+        "19": "下 関",
+        "20": "若 松",
+        "24": "大 村",
+    }
+    jcd = result_path.split("_")[0]
+    csv_path = f"../model/artifacts/{jcd_name_dict.get(jcd)}/eval_features_recent_{jcd_name_dict.get(jcd)}.csv"
+    eval_df = pd.read_csv(csv_path)
+    result_df = pd.read_csv(result_path)
+    merged_df = merge_odds(eval_df, result_df)
+    print(merged_df.head())
+    # Set odds to 0 where trifecta_is_hit and trio_is_hit are not True
+    merged_df["trifecta_odds"] = merged_df.apply(
+        lambda row: row["trifecta_odds"] if bool(row.get("trifecta_is_hit", False)) else 0,
+        axis=1
+    )
+    merged_df["trio_odds"] = merged_df.apply(
+        lambda row: row["trio_odds"] if bool(row.get("trio_is_hit", False)) else 0,
+        axis=1
+    )
+
+    print(merged_df.head())
+    merged_df.to_csv(result_path, index=False)
+
 if __name__ == "__main__":
     jcd_name_dict = {
         "01": "桐 生",
@@ -41,9 +70,9 @@ if __name__ == "__main__":
         "20": "若 松",
         "24": "大 村",
     }
-    jcd = "07"
+    jcd = "01"
     csv_path = f"../model/artifacts/{jcd_name_dict.get(jcd)}/eval_features_recent_{jcd_name_dict.get(jcd)}.csv"
-    result_path = "07_predictions_20251016_171136.csv"
+    result_path = "01_predictions_20251121_010408.csv"
     eval_df = pd.read_csv(csv_path)
     result_df = pd.read_csv(result_path)
     merged_df = merge_odds(eval_df, result_df)

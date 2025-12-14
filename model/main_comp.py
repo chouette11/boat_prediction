@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[55]:
+# In[70]:
 
 
 import sys
@@ -79,7 +79,7 @@ register_feature(FeatureDef("wind_sin", _wind_sin, deps=["wind_dir_deg"]))
 register_feature(FeatureDef("wind_cos", _wind_cos, deps=["wind_dir_deg"]))
 
 
-# In[56]:
+# In[71]:
 
 
 import nbformat
@@ -98,7 +98,7 @@ else :
         f.write(source)
 
 
-# In[57]:
+# In[72]:
 
 
 load_dotenv(override=True)
@@ -131,7 +131,7 @@ with psycopg2.connect(**DB_CONF) as conn:
 print(f"Loaded {len(result_df)} rows from the database.")
 
 
-# In[58]:
+# In[73]:
 
 
 result_df = apply_features(result_df)
@@ -165,7 +165,7 @@ print(missing_ratio_percent.sort_values(ascending=False))
 os.makedirs("artifacts", exist_ok=True)
 
 
-# In[59]:
+# In[74]:
 
 
 # ---------------- Loss / Regularization Weights -----------------
@@ -192,7 +192,7 @@ else:
 print(f"TOPK_WEIGHTS: {TOPK_WEIGHTS}")
 
 
-# In[60]:
+# In[75]:
 
 
 def pl_nll(scores: torch.Tensor, ranks: torch.Tensor, reduce: bool = True) -> torch.Tensor:
@@ -262,7 +262,7 @@ print("pl_nll should be ~0 :", pl_nll(scores, ranks).item())
 print("pl_nll_topk (k=3) should be ~0 :", pl_nll_topk(scores, ranks, k=TOPK_K, weights=TOPK_WEIGHTS).item())
 
 
-# In[61]:
+# In[76]:
 
 
 def choose_val_cutoff(
@@ -346,7 +346,7 @@ model = DualHeadRanker(boat_in=boat_dim).to(device)
 opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=5e-5)
 
 
-# In[62]:
+# In[77]:
 
 
 def evaluate_model(model, dataset, device):
@@ -365,7 +365,7 @@ def evaluate_model(model, dataset, device):
     return total_loss / len(dataset)
 
 
-# In[63]:
+# In[78]:
 
 
 EPOCHS = 20
@@ -472,7 +472,7 @@ torch.save(model.state_dict(), model_path2)
 print(f"Model saved to {model_path}")
 
 
-# In[64]:
+# In[79]:
 
 
 # ---- Monkey‑patch ROIAnalyzer so it uses BoatRaceDataset2 (MTL) ----------
@@ -501,7 +501,7 @@ print(f"[simulate] Loaded {len(df_recent)} rows ({start_date} – {today}).")
 print(f"columns: {', '.join(df_recent.columns)}")
 
 
-# In[65]:
+# In[80]:
 
 
 class _RankOnly(nn.Module):
@@ -556,7 +556,7 @@ else:
     all_ranks  = torch.cat(all_ranks,  dim=0)   # (N,6)
 
 
-# In[66]:
+# In[81]:
 
 
 df_scores = pd.DataFrame(all_scores.numpy(), columns=[f"lane{i}_score" for i in range(1, 7)])
@@ -751,7 +751,7 @@ for n in range(1, 6):
 
 
 
-# In[67]:
+# In[82]:
 
 
 def top1_accuracy(scores: torch.Tensor, ranks: torch.Tensor) -> float:
@@ -992,7 +992,7 @@ with open(metrics_path, "a", newline="") as f:
 print(f"[saved] {metrics_path}")
 
 
-# In[68]:
+# In[83]:
 
 
 # === 条件別ヒット率/ROI 分析（修正版） =========================
@@ -1601,7 +1601,7 @@ except Exception as e:
 # ======================================================================
 
 
-# In[69]:
+# In[84]:
 
 
 print("[predict] Prediction completed and saved to artifacts directory.")

@@ -6,6 +6,7 @@ SET maintenance_work_mem = '512MB';
 SET max_parallel_workers_per_gather = 4;
 SET parallel_leader_participation = on;
 
+DROP MATERIALIZED VIEW IF EXISTS feat.boat_flat CASCADE;
 CREATE MATERIALIZED VIEW IF NOT EXISTS feat.boat_flat AS
 SELECT DISTINCT ON (b.race_key, b.lane)
        b.race_key,

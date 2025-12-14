@@ -100,6 +100,7 @@ FROM (
 ORDER BY rk, lane, result_id DESC;
 
 -- ボート・選手情報（通常 VIEW） ------------------------------
+DROP MATERIALIZED VIEW IF EXISTS core.boat_info CASCADE;
 CREATE MATERIALIZED VIEW IF NOT EXISTS core.boat_info AS
 WITH base AS (
     SELECT

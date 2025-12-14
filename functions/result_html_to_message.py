@@ -154,7 +154,7 @@ def _build_daily_summary(hd: str, DB) -> dict:
         staked += STAKE_YEN_PER_SIGNAL
         if eval_fields.get("hit"):
             hits += 1
-            returned += int(eval_fields.get("payout_yen", 0))
+            returned += int(eval_fields.get("payout_yen", 0)) * (STAKE_YEN_PER_SIGNAL // 100)
 
     pnl = returned - staked
     hit_rate = (hits / completed) if completed else 0.0

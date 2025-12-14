@@ -14,9 +14,6 @@ from itertools import permutations
 
 
 # --- constants ------------------------------------------------------------
-UNIT_JPY = 100             # 1 "bet unit" = 100 JPY (競艇の最低賭け金)
-
-
 class ROIAnalyzer:
     def __init__(self, model, scaler, num_cols: List[str], device: str = "cpu", batch_size: int = 512):
         self.model = model
@@ -91,7 +88,7 @@ class ROIAnalyzer:
         df = self.preprocess_df(df_eval, self.scaler, self.num_cols)
         loader = self._build_loader(df)
         if not is_pred:
-            df_odds = df[["race_key", "trifecta_odds", "trio_odds"]].copy()
+            df_odds = df[["race_key", "trifecta_odds"]].copy()
             return loader, df, df_odds
         else:
             return loader, df, pd.DataFrame()
@@ -118,13 +115,46 @@ class ROIPredictor(ROIAnalyzer):
         Returns a DataFrame with lane1_score..lane6_score (logits). Optionally appends meta columns.
         """
         loader, df, _ = self._create_loader_pred(df_eval)
+        # Determine expected dims from the underlying DualHeadRanker even if wrapped by _RankOnly
+        core = getattr(self.model, "base", self.model)
+        exp_ctx = int(core.ctx_fc.in_features)
+        exp_boat_linear_in = int(core.boat_fc.in_features)
+        lane_dim = int(core.lane_emb.embedding_dim)
+        exp_boat = exp_boat_linear_in - lane_dim
+
         self.model.eval()
         outs = []
         with torch.inference_mode():
             for ctx, boats, lane_ids, _, __, ___ in loader:
-                ctx, boats, lane_ids = ctx.to(self.device), boats.to(self.device), lane_ids.to(self.device)
+                # --- align ctx dims (pad with zeros or truncate tail) ---
+                if ctx.size(1) != exp_ctx:
+                    if ctx.size(1) < exp_ctx:
+                        pad = torch.zeros(ctx.size(0), exp_ctx - ctx.size(1), dtype=ctx.dtype, device=ctx.device)
+                        ctx = torch.cat([ctx, pad], dim=1)
+                    else:
+                        ctx = ctx[:, :exp_ctx]
+
+                # --- align boats dims (B,6,D) to expected per-boat feature count ---
+                if boats.size(2) != exp_boat:
+                    if boats.size(2) < exp_boat:
+                        pad = torch.zeros(boats.size(0), boats.size(1), exp_boat - boats.size(2), dtype=boats.dtype, device=boats.device)
+                        boats = torch.cat([boats, pad], dim=2)
+                    else:
+                        boats = boats[:, :, :exp_boat]
+
+                # --- ensure lane_ids shape is (B,6) ---
+                if lane_ids.dim() == 1:
+                    lane_ids = lane_ids.unsqueeze(1).expand(-1, boats.size(1))
+                elif lane_ids.dim() == 2 and lane_ids.size(1) == 1 and boats.size(1) > 1:
+                    lane_ids = lane_ids.expand(-1, boats.size(1))
+
+                ctx = ctx.to(self.device)
+                boats = boats.to(self.device)
+                lane_ids = lane_ids.to(self.device)
+
                 scores = self.model(ctx, boats, lane_ids)  # (B,6) logits
                 outs.append(scores.cpu())
+
         scores = torch.cat(outs, dim=0) if len(outs) else torch.empty((0, 6))
         pred_df = pd.DataFrame(scores.numpy(), columns=[f"lane{i}_score" for i in range(1, 7)])
 
@@ -169,7 +199,7 @@ class ROIPredictor(ROIAnalyzer):
                             df_eval: Optional[pd.DataFrame] = None,
                             scores_df: Optional[pd.DataFrame] = None,
                             K: int = 10,
-                            tau: float = 1.0,
+                            tau: float = 5.0,
                             include_meta: bool = True,
                             save_exacta: Optional[str] = None,
                             save_trifecta: Optional[str] = None) -> Tuple[pd.DataFrame, pd.DataFrame]:

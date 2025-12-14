@@ -9,28 +9,12 @@ from urllib3.util.retry import Retry
 
 jcd_to_en = {
     "01": "Kiryu",
-    "02": "Toda",
-    "03": "Edogawa",
     "04": "Heiwajima",
-    "05": "Tamagawa",
-    "06": "Hamanako",
     "07": "Gamagori",
-    "08": "Tokoname",
-    "09": "Tsu",
-    "10": "Mikuni",
-    "11": "Biwako",
     "12": "Suminoe",
-    "13": "Amagasaki",
-    "14": "Naruto",
     "15": "Marugame",
-    "16": "Kojima",
-    "17": "Miyajima",
-    "18": "Tokuyama",
     "19": "Shimonoseki",
     "20": "Wakamatsu",
-    "21": "Ashiya",
-    "22": "Fukuoka",
-    "23": "Karatsu",
     "24": "Omura"
 }
 
@@ -148,4 +132,4 @@ def download_off(start_ymd: str, days: int = 3, interval_sec: int = 1, kind: str
             time.sleep(interval_sec)
 
 if __name__ == "__main__":
-    download_off("20230101", days=365, interval_sec=0, kind="odds3t", max_workers=8, verbose=False)
+    download_off("20251101", days=30, interval_sec=0, kind="beforeinfo", max_workers=8, verbose=False)

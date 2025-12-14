@@ -4,6 +4,20 @@
 # In[ ]:
 
 
+
+
+
+# In[ ]:
+
+
+
+
+
+
+
+# In[ ]:
+
+
 import sys
 import os
 import pandas as pd
@@ -88,13 +102,13 @@ from nbconvert import PythonExporter
 if len(sys.argv[1]) < 4:
     pass
 else :
-    with open("main_base.ipynb", "r", encoding="utf-8") as f:
+    with open("main_base_real.ipynb", "r", encoding="utf-8") as f:
         nb = nbformat.read(f, as_version=4)
 
     exporter = PythonExporter()
     source, _ = exporter.from_notebook_node(nb)
 
-    with open("main_base.py", "w", encoding="utf-8") as f:
+    with open("main_base_real.py", "w", encoding="utf-8") as f:
         f.write(source)
 
 
@@ -102,11 +116,11 @@ else :
 
 
 load_dotenv(override=True)
-venue = '若 松'
+venue = '桐 生'
 if len(sys.argv[1]) < 4:
     venue = sys.argv[1]
 print(f"Venue: {venue}")
-os.makedirs(f"artifacts/{venue}", exist_ok=True)
+os.makedirs(f"artifacts/{venue}_real", exist_ok=True)
 
 DB_CONF = {
     "host":     os.getenv("PGHOST", "localhost"),
@@ -115,13 +129,12 @@ DB_CONF = {
     "user":     os.getenv("PGUSER", "br_user"),
     "password": os.getenv("PGPASSWORD", "secret"),
 }
-print("DB Config:", DB_CONF)
 
 # Use short‑lived connection to avoid leaks
 with psycopg2.connect(**DB_CONF) as conn:
     result_df = pd.read_sql(f"""
         SELECT * FROM feat.train_features_base
-        WHERE race_date <= '2025-10-01'
+        WHERE race_date <= '2024-12-31'
         AND venue = '{venue}'
     """, conn)
 
@@ -149,7 +162,7 @@ NUM_COLS = BASE_NUM_COLS
 bool_cols = [c for c in result_df.columns if c.endswith("_fs_flag")]
 result_df[bool_cols] = result_df[bool_cols].fillna(False).astype(bool)
 os.makedirs("artifacts", exist_ok=True)
-result_df.to_csv(f"artifacts/train_features_{venue}.csv", index=False)
+result_df.to_csv(f"artifacts/{venue}_real/train_features_{venue}.csv", index=False)
 print(result_df.head())
 print("データフレーム全体の欠損値の総数:", result_df.isnull().sum().sum())
 
@@ -318,11 +331,8 @@ jcd_dict = {
 }
 now = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
 jcd = jcd_dict[venue]
-yyymm  = dt.datetime.now().strftime("%Y%m")
-os.makedirs(f"artifacts/scalers_{yyymm}/{jcd}", exist_ok=True)
-os.makedirs(f"../functions/scalers_{yyymm}/{jcd}", exist_ok=True)
-joblib.dump(scaler, f"artifacts/scalers_{yyymm}/{jcd}/scaler_{now}.joblib")
-joblib.dump(scaler, f"../functions/scalers_{yyymm}/{jcd}/scaler_{now}.joblib")
+os.makedirs(f"artifacts/real_scalers/{jcd}", exist_ok=True)
+joblib.dump(scaler, f"artifacts/real_scalers/{jcd}/scaler_{now}.joblib")
 
 mode = "zscore"  
 ds_train = BoatRaceDatasetBase(df_tr)
@@ -548,13 +558,9 @@ jcd_dict = {
 }
 now = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
 jcd = jcd_dict[venue]
-yyyymm  = dt.datetime.now().strftime("%Y%m")
-os.makedirs(f"artifacts/models_{yyyymm}/{jcd}", exist_ok=True)
-os.makedirs(f"../functions/models_{yyyymm}/{jcd}", exist_ok=True)
-model_path = f"artifacts/models_{yyyymm}/{jcd}/model_{now}.pth"
-model_path2 = f"../functions/models_{yyyymm}/{jcd}/model_{now}.pth"
+os.makedirs(f"artifacts/real_models/{jcd}", exist_ok=True)
+model_path = f"artifacts/real_models/{jcd}/model_{now}.pth"
 torch.save(model.state_dict(), model_path)
-torch.save(model.state_dict(), model_path2)
 print(f"Model saved to {model_path}")
 
 
@@ -566,10 +572,7 @@ from types import MethodType
 from BoatRaceDataset_base import BoatRaceDatasetBase 
 from torch.utils.data import DataLoader
 from roi_util import ROIAnalyzer
-import datetime as dt
-import psycopg2
-import os
-import pandas as pd
+
 
 #  # 最新のモデルを取得
 # model_list = os.listdir("artifacts/models")
@@ -582,39 +585,21 @@ import pandas as pd
 #     model = DualHeadRanker(boat_in=boat_dim)
 #     model.load_state_dict(torch.load(model_path, map_location=device))
 
-if False:
-    venue = '若 松'
 today = dt.date.today()
-start_date = dt.date(2025, 11, 1)
-end = dt.date(2025, 11, 30)
+start_date = dt.date(2025, 1, 1)
+end = dt.date(2025, 8, 16)
 
 query = f"""
     SELECT * FROM feat.eval_features_base
     WHERE race_date BETWEEN '{start_date}' AND '{today}'
     AND venue = '{venue}'
 """
-
-DB_CONF = {
-    "host":     os.getenv("PGHOST", "localhost"),
-    "port":     int(os.getenv("PGPORT", 5432)),
-    "dbname":   os.getenv("PGDATABASE", "boatrace"),
-    "user":     os.getenv("PGUSER", "br_user"),
-    "password": os.getenv("PGPASSWORD", "secret"),
-}
 with psycopg2.connect(**DB_CONF) as conn:
     df_recent = pd.read_sql(query, conn)
 print(df_recent)
 
-exclude = []
-for lane in range(1, 7):
-      exclude.append(
-            f"lane{lane}_bf_course",
-      )
-      exclude.append(f"lane{lane}_bf_st_time")
-      exclude.append(f"lane{lane}_weight")
-
 df_recent.drop(columns=exclude, inplace=True, errors="ignore")
-df_recent.to_csv(f"artifacts/{venue}/eval_features_recent_{venue}.csv", index=False)
+df_recent.to_csv(f"artifacts/{venue}_real/eval_features_recent_{venue}.csv", index=False)
 print(f"[simulate] Loaded {len(df_recent)} rows ({start_date} – {today}).")
 print(f"columns: {', '.join(df_recent.columns)}")
 
@@ -956,7 +941,7 @@ df_score_ranks["is_hit_trio"] = df_score_ranks.apply(
     lambda row: _is_hit_trio(row["scores"], row["ranks"]), axis=1
 )
 
-df_score_ranks.to_csv(f"artifacts/{venue}/merged_scores_ranks_{venue}.csv", index=False)
+df_score_ranks.to_csv(f"artifacts/{venue}_real/merged_scores_ranks_{venue}.csv", index=False)
 total_benefit = 0.0
 total_submit = 0.0
 
@@ -1191,8 +1176,8 @@ print(f"  • TopN cover (ordered): N=1 model {model_top1_ord:.3f} vs pop {pop_t
 
 # ---- CSV に追記保存 ----
 import csv, os
-os.makedirs(f"artifacts/{venue}", exist_ok=True)
-metrics_path = f"artifacts/{venue}/predict_metrics_recent_{venue}.csv"
+os.makedirs(f"artifacts/{venue}_real", exist_ok=True)
+metrics_path = f"artifacts/{venue}_real/predict_metrics_recent_{venue}.csv"
 write_header = not os.path.exists(metrics_path)
 with open(metrics_path, "a", newline="") as f:
     w = csv.writer(f)
@@ -1424,11 +1409,11 @@ _cond_result = pd.concat(_tables, ignore_index=True) if _tables else pd.DataFram
 
 # 4) 保存
 os.makedirs("artifacts", exist_ok=True)
-_base.to_csv(f"artifacts/{venue}/cond_base_table_{venue}.csv", index=False)
+_base.to_csv(f"artifacts/{venue}_real/cond_base_table_{venue}.csv", index=False)
 # is_hit_trifecta が True の行だけに絞る
 _base_hits = _base[_base["is_hit_trifecta"] == True].copy()
-_base_hits.to_csv(f"artifacts/{venue}/cond_base_table_hits_{venue}.csv", index=False)
-_cond_result.to_csv(f"artifacts/{venue}/cond_hit_roi_{venue}.csv", index=False)
+_base_hits.to_csv(f"artifacts/{venue}_real/cond_base_table_hits_{venue}.csv", index=False)
+_cond_result.to_csv(f"artifacts/{venue}_real/cond_hit_roi_{venue}.csv", index=False)
 
 # 5) コンソールにハイライト表示
 for _n in [1, 2, 3, 4, 5]:
@@ -1495,7 +1480,7 @@ if not _cond_result.empty:
     # (A) 全体で ROI 最大の条件
     _best_overall = _cond_result.sort_values("roi", ascending=False).head(1)
     _best_overall_matches = _filter_matches(_best_overall.iloc[0])
-    _best_overall_path = "artifacts/cond_best_roi_matches.csv"
+    _best_overall_path = f"artifacts/{venue}_real/cond_best_roi_matches.csv"
     _best_overall_matches.to_csv(_best_overall_path, index=False)
     print(f"[cond] Best-ROI matches (overall) saved to {_best_overall_path}  —  "
           f"condition={_best_overall.iloc[0]['condition']}, bin={_best_overall.iloc[0]['bin']}, "
@@ -1720,7 +1705,7 @@ if "race_date" in _base.columns and not _base.empty:
                 "total_return": ret, "total_cost": cost,
             })
         sum_df = pd.DataFrame(summary).sort_values("top_n")
-        sum_path = f"artifacts/{venue}/cond_expected_roi_summary_{venue}.csv"
+        sum_path = f"artifacts/{venue}_real/cond_expected_roi_summary_{venue}.csv"
         sum_df.to_csv(sum_path, index=False)
         print(f"[cond] Expected ROI summary saved to {sum_path}")
 
@@ -1807,8 +1792,8 @@ try:
             audit_df = audit_df.groupby("top_n", as_index=False).apply(_add_share).reset_index(drop=True)
 
             # 保存
-            os.makedirs(f"artifacts/{venue}", exist_ok=True)
-            audit_path = f"artifacts/{venue}/audit_true_order_prob_deciles_{venue}.csv"
+            os.makedirs(f"artifacts/{venue}_real", exist_ok=True)
+            audit_path = f"artifacts/{venue}_real/audit_true_order_prob_deciles_{venue}.csv"
             audit_df.to_csv(audit_path, index=False)
             print(f"[audit] Saved decile audit → {audit_path}  (rows={len(audit_df)})")
 
@@ -1860,7 +1845,7 @@ df_recent['water_temp'] = None
 if 'wave_height' in df_recent.columns:
     df_recent['wave_height'] = df_recent['wave_height'] * 0.01
 print(df_recent)
-df_recent.to_csv("artifacts/pred_features_recent.csv", index=False)
+df_recent.to_csv(f"artifacts/{venue}_real/pred_features_recent.csv", index=False)
 
 df_recent.drop(columns=exclude, inplace=True, errors="ignore")
 
@@ -1869,6 +1854,28 @@ if df_recent.empty:
 
 print(f"[predict] Loaded {len(df_recent)} rows ({start_date} – {today}).")
 print(f"columns: {', '.join(df_recent.columns)}")
+
+# --- Fill required NUM_COLS to avoid dropna→empty in ROIPredictor ---
+import numpy as _np
+
+# 1) Derive wind_sin/cos from wind_dir_deg if available
+if "wind_dir_deg" in df_recent.columns:
+    df_recent["wind_sin"] = _np.sin(_np.deg2rad(df_recent["wind_dir_deg"]))
+    df_recent["wind_cos"] = _np.cos(_np.deg2rad(df_recent["wind_dir_deg"]))
+else:
+    # ensure columns exist (filled later)
+    if "wind_sin" not in df_recent.columns:
+        df_recent["wind_sin"] = _np.nan
+    if "wind_cos" not in df_recent.columns:
+        df_recent["wind_cos"] = _np.nan
+
+# 2) Fill missing required numeric features with training scaler means
+_mean_map = {col: float(mu) for col, mu in zip(NUM_COLS, scaler.mean_)}
+for _c in NUM_COLS:
+    if _c not in df_recent.columns:
+        df_recent[_c] = _mean_map[_c]
+    else:
+        df_recent[_c] = pd.to_numeric(df_recent[_c], errors="coerce").fillna(_mean_map[_c])
 
 # ------------------------------
 # ROIPredictor でスコア＆確率を一括生成
@@ -1879,19 +1886,153 @@ predictor = ROIPredictor(model=rank_model, scaler=scaler,
 # (1) スコア（logits）: lane1_score..lane6_score (+ メタ列) を保存
 pred_scores_df = predictor.predict_scores(df_recent,
                                           include_meta=True,
-                                          save_to="artifacts/pred_scores.csv")
+                                          save_to=f"artifacts/{venue}_real/pred_scores.csv")
 
 # (2) 勝率＆フェアオッズを保存
 pred_probs_df = predictor.predict_win_probs(scores_df=pred_scores_df,
                                             include_meta=True,
-                                            save_to="artifacts/pred_win_probs.csv")
+                                            save_to=f"artifacts/{venue}_real/pred_win_probs.csv")
+
 # (3) 馬単/三連単の TOP‑K（PL 方式）を保存
 exa_df, tri_df = predictor.predict_exotics_topk(scores_df=pred_scores_df,
                                                 K=10,
                                                 tau=1.0,
                                                 include_meta=True,
-                                                save_exacta="artifacts/pred_exacta_topk.csv",
-                                                save_trifecta="artifacts/pred_trifecta_topk.csv")
+                                                save_exacta=f"artifacts/{venue}_real/pred_exacta_topk.csv",
+                                                save_trifecta=f"artifacts/{venue}_real/pred_trifecta_topk.csv")
+
+# ==============================================================
+# ② 分裂型（ペルソナ別予想）
+#    - 既存のスコア(pred_scores_df)を軽量変換して「性格の違うAI」を3体同時に生成
+#    - safe : 温度低め（堅実）＋内枠バイアス
+#    - chaos: 温度高め（波乱）＋外枠バイアス＋微小ノイズ
+#    - trend: 直近勝率(softmax)をさらに強調（人気追従寄り）
+# ==============================================================
+
+import numpy as _np
+import pandas as _pd
+
+def _copy_scores(df: _pd.DataFrame) -> _pd.DataFrame:
+    cols = [c for c in df.columns if c.startswith("lane") and c.endswith("_score")]
+    keep = ["race_key", "rno", "jcd", "hd", "venue", "race_date"]
+    keep = [c for c in keep if c in df.columns]
+    return df[keep + cols].copy()
+
+def _apply_temperature(df_scores: _pd.DataFrame, tau: float) -> _pd.DataFrame:
+    """logit / tau で温度スケーリング（tau<1で尖る／>1で平坦化）"""
+    out = df_scores.copy()
+    lane_cols = [c for c in out.columns if c.startswith("lane") and c.endswith("_score")]
+    for c in lane_cols:
+        out[c] = out[c] / float(max(tau, 1e-6))
+    return out
+
+def _apply_lane_bias(df_scores: _pd.DataFrame, inner_boost: float = 0.0, outer_boost: float = 0.0) -> _pd.DataFrame:
+    """
+    内枠(1-2)・外枠(4-6)に一定のバイアス(ロジット加算)を与える。
+    正の値で有利化、負の値で不利化。
+    """
+    out = df_scores.copy()
+    for i in (1, 2):
+        col = f"lane{i}_score"
+        if col in out.columns:
+            out[col] = out[col] + inner_boost
+    for i in (4, 5, 6):
+        col = f"lane{i}_score"
+        if col in out.columns:
+            out[col] = out[col] + outer_boost
+    return out
+
+def _apply_noise(df_scores: _pd.DataFrame, std: float = 0.0, seed: int = 0) -> _pd.DataFrame:
+    """スコアに微小ノイズを加える（波乱味付け）"""
+    if std <= 0:
+        return df_scores
+    rng = _np.random.default_rng(seed)
+    out = df_scores.copy()
+    lane_cols = [c for c in out.columns if c.startswith("lane") and c.endswith("_score")]
+    noise = rng.normal(loc=0.0, scale=std, size=(len(out), len(lane_cols)))
+    out[lane_cols] = out[lane_cols].to_numpy() + noise
+    return out
+
+def _emphasize_current_probs(df_scores: _pd.DataFrame, sharpness: float = 1.2) -> _pd.DataFrame:
+    """
+    現在の lane ログイットをsoftmax→確率を sharpness 乗 → 逆変換でロジット強調。
+    直感的に「今の強弱をそのまま強める」= 人気追従寄り。
+    """
+    out = df_scores.copy()
+    lane_cols = [c for c in out.columns if c.startswith("lane") and c.endswith("_score")]
+    S = out[lane_cols].to_numpy(dtype=float)
+    S = S - S.max(axis=1, keepdims=True)  # 数値安定化
+    P = _np.exp(S); P = P / P.sum(axis=1, keepdims=True)
+    P = _np.power(P, sharpness)
+    P = P / P.sum(axis=1, keepdims=True)
+    # logit = log(p) - log(1-p) ではなく、多クラスのため log(p) 比で十分
+    # 1列を基準に相対ロジット化してから再中心化
+    logP = _np.log(_np.clip(P, 1e-12, 1.0))
+    logP = logP - logP.mean(axis=1, keepdims=True)
+    out[lane_cols] = logP
+    return out
+
+def _persona_scores(pred_scores_df: _pd.DataFrame, name: str) -> _pd.DataFrame:
+    base = _copy_scores(pred_scores_df)
+    if name == "safe":
+        x = _apply_temperature(base, tau=0.8)         # 低温度で尖らせる
+        x = _apply_lane_bias(x, inner_boost=+0.15)    # 1-2を少し持ち上げ
+        return x
+    elif name == "chaos":
+        x = _apply_temperature(base, tau=1.3)         # 高温度で平坦化
+        x = _apply_lane_bias(x, outer_boost=+0.20)    # 4-6を強気に
+        x = _apply_noise(x, std=0.07, seed=42)
+        return x
+    elif name == "trend":
+        x = _emphasize_current_probs(base, sharpness=1.35)  # 現在の傾向を強調
+        return x
+    else:
+        return base
+
+PERSONAS = ["safe", "chaos", "trend"]
+
+# ペルソナ別に TOP‑K 三連単を生成して保存
+persona_tri_list = []
+for name in PERSONAS:
+    sd = _persona_scores(pred_scores_df, name)
+    # 保存先ファイル名
+    tri_path = f"artifacts/{venue}_real/pred_trifecta_topk_{name}.csv"
+    exa_path = f"artifacts/{venue}_real/pred_exacta_topk_{name}.csv"
+    _exa, _tri = predictor.predict_exotics_topk(scores_df=sd,
+                                                K=10,
+                                                tau=1.0,           # ここは PL 計算の温度（必要なら個別変更可）
+                                                include_meta=True,
+                                                save_exacta=exa_path,
+                                                save_trifecta=tri_path)
+    _tri = _tri.copy()
+    _tri["persona"] = name
+    persona_tri_list.append(_tri)
+
+# 結合して 1 ファイルにも出しておく
+if persona_tri_list:
+    tri_all = _pd.concat(persona_tri_list, ignore_index=True)
+    tri_all.to_csv(f"artifacts/{venue}_real/pred_trifecta_topk_personas.csv", index=False)
+
+    # --- 簡易 Vote 集計（各レースで各ペルソナの1位に1票）と不一致度 ---
+    # tri_df 形式は race_key ごとに 'rank' 列（1始まり）/ 'trifecta' / 'prob' がある前提
+    first_choices = (tri_all.sort_values(["race_key", "persona", "rank"])
+                             .query("rank == 1")
+                             .loc[:, ["race_key", "persona", "trifecta", "prob"]]
+                             .copy())
+    # 票数
+    vote = (first_choices.groupby(["race_key", "trifecta"])
+                        .size().reset_index(name="votes"))
+    # 不一致度 = 人数(=len(PERSONAS)) - 最多票
+    max_votes = vote.groupby("race_key")["votes"].max().rename("max_votes")
+    disagree = max_votes.to_frame().reset_index()
+    disagree["n_personas"] = len(PERSONAS)
+    disagree["disagreement"] = disagree["n_personas"] - disagree["max_votes"]
+
+    vote.to_csv(f"artifacts/{venue}_real/pred_persona_votes.csv", index=False)
+    disagree.to_csv(f"artifacts/{venue}_real/pred_persona_disagreement.csv", index=False)
+    print("[personas] saved: pred_trifecta_topk_personas.csv, pred_persona_votes.csv, pred_persona_disagreement.csv")
+else:
+    print("[personas] persona_tri_list is empty; skipped saving.")
 
 
 # In[ ]:

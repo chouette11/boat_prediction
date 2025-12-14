@@ -10,11 +10,12 @@
 -- =========================================================
 -- ボート・選手情報（通常 VIEW） ------------------------------
 -- ボート・選手情報（予測用：beforeinfoのみ）
+DROP VIEW IF EXISTS core.pred_boat_info CASCADE;
 CREATE OR REPLACE VIEW core.pred_boat_info AS
 WITH b AS (
   SELECT *,
-         core.f_race_key(race_date, race_no, stadium) AS race_key
-  FROM raw.beforeinfo
+         core.f_race_key(race_date::date, race_no::int, core.f_official_venue_no(stadium)) AS race_key
+  FROM raw.beforeinfo_off
 )
 SELECT DISTINCT ON (b.race_key, b.lane)
        b.race_key,
@@ -40,43 +41,45 @@ FROM b
 ORDER BY b.race_key, b.lane, b.course;
 
 -- 天候 ------------------------------------------------------
+DROP MATERIALIZED VIEW IF EXISTS core.pred_weather CASCADE;
 CREATE MATERIALIZED VIEW IF NOT EXISTS core.pred_weather AS
 SELECT DISTINCT ON (race_key)
-       core.f_race_key(race_date, race_no, stadium) AS race_key,
+       core.f_race_key(race_date::date, race_no::int, core.f_official_venue_no(stadium)) AS race_key,
        NULLIF(regexp_replace(air_temp_raw   ,'[^0-9.]','','g'), '')::NUMERIC AS air_temp,
        NULLIF(regexp_replace(wind_speed_raw ,'[^0-9.]','','g'), '')::NUMERIC AS wind_speed,
        CASE wind_dir_raw
-           WHEN 'is-wind1'  THEN 0
-           WHEN 'is-wind2'  THEN 22.5
-           WHEN 'is-wind3'  THEN 45
-           WHEN 'is-wind4'  THEN 67.5
-           WHEN 'is-wind5'  THEN 90
-           WHEN 'is-wind6'  THEN 112.5
-           WHEN 'is-wind7'  THEN 135
-           WHEN 'is-wind8'  THEN 157.5
-           WHEN 'is-wind9'  THEN 180
-           WHEN 'is-wind10' THEN 202.5
-           WHEN 'is-wind11' THEN 225
-           WHEN 'is-wind12' THEN 247.5
-           WHEN 'is-wind13' THEN 270
-           WHEN 'is-wind14' THEN 292.5
-           WHEN 'is-wind15' THEN 315
-           WHEN 'is-wind16' THEN 337.5
+           WHEN 'is-wind1'  THEN 22.5
+           WHEN 'is-wind2'  THEN 45
+           WHEN 'is-wind3'  THEN 67.5
+           WHEN 'is-wind4'  THEN 90
+           WHEN 'is-wind5'  THEN 112.5
+           WHEN 'is-wind6'  THEN 135
+           WHEN 'is-wind7'  THEN 157.5
+           WHEN 'is-wind8'  THEN 180
+           WHEN 'is-wind9'  THEN 202.5
+           WHEN 'is-wind10' THEN 225
+           WHEN 'is-wind11' THEN 247.5
+           WHEN 'is-wind12' THEN 270
+           WHEN 'is-wind13' THEN 292.5
+           WHEN 'is-wind14' THEN 315
+           WHEN 'is-wind15' THEN 337.5
+           WHEN 'is-wind16' THEN 0
            ELSE NULL
        END AS wind_dir_deg,
        NULLIF(regexp_replace(wave_height_raw,'[^0-9.]','','g'), '')::NUMERIC AS wave_height,
        NULLIF(regexp_replace(water_temp_raw ,'[^0-9.]','','g'), '')::NUMERIC AS water_temp,
        weather_txt
-FROM raw.weather
+FROM raw.weather_off
 ORDER BY race_key, obs_time_label DESC;
 
--- レースキー→日付マップ（予測用）
+-- レースキー→日付/会場マップ（予測用）
 CREATE MATERIALIZED VIEW IF NOT EXISTS core.pred_races AS
-SELECT DISTINCT ON (core.f_race_key(race_date, race_no, stadium))
-       core.f_race_key(race_date, race_no, stadium) AS race_key,
-       race_date
-FROM raw.beforeinfo
-ORDER BY core.f_race_key(race_date, race_no, stadium), race_date DESC;
+SELECT DISTINCT ON (core.f_race_key(race_date::date, race_no::int, core.f_official_venue_no(stadium)))
+       core.f_race_key(race_date::date, race_no::int, core.f_official_venue_no(stadium)) AS race_key,
+       race_date,
+       stadium AS venue
+FROM raw.beforeinfo_off
+ORDER BY core.f_race_key(race_date::date, race_no::int, core.f_official_venue_no(stadium)), race_date DESC;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_core_pred_races_race_key
   ON core.pred_races (race_key);
@@ -87,7 +90,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_core_pred_races_race_key
 -- ==========================================================
 
 REFRESH MATERIALIZED VIEW core.pred_weather;
-REFRESH MATERIALIZED VIEW core.pred_boat_info;
 REFRESH MATERIALIZED VIEW core.pred_races;
 -- ==========================================================
 -- データ存在チェック（core.* のマテビューすべて）

@@ -22,8 +22,10 @@ def lzh_to_txt(lzh_path: str, base_out_dir: str, rel_path: str):
 
 # 解凍例：ある月をまとめて解凍
 if __name__ == "__main__":
-    results_root = "download/lzh/results/2022"
-    programs_root = "download/lzh/programs/2022"
+    import datetime as dt
+    last_month_date = dt.date.today() - dt.timedelta(days=30)
+    results_root = f"download/lzh/results/{last_month_date.year}/11"
+    programs_root = f"download/lzh/programs/{last_month_date.year}/11"
     pathlib.Path("download/txt/results").mkdir(parents=True, exist_ok=True)
     pathlib.Path("download/txt/programs").mkdir(parents=True, exist_ok=True)
     for root, dirs, files in os.walk(results_root):

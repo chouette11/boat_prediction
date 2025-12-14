@@ -1,6 +1,6 @@
 def check(conn):
-    no = input("Enter the process ID to terminate: ")
     cur = conn.cursor()
+    no = input("Enter the process ID to terminate: ")
     # 数を確認
     ex = f"""
 SELECT pg_terminate_backend({no});

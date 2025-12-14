@@ -12,25 +12,11 @@ SET max_parallel_workers_per_gather = 4;
 SET parallel_leader_participation = on;
 
 -- Support join to 05 stats
-
-/* ---------- filtered_course（06から独立してここで定義） ---------- */
-CREATE MATERIALIZED VIEW IF NOT EXISTS feat.filtered_course AS
-SELECT
-    b.racer_id AS reg_no,
-    b.course,
-    COUNT(*) AS starts,
-    SUM(CASE WHEN r.rank = 1 THEN 1 ELSE 0 END) AS firsts,
-    SUM(CASE WHEN r.rank = 1 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*),0) AS first_rate,
-    SUM(CASE WHEN r.rank <= 2 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*),0) AS two_rate,
-    SUM(CASE WHEN r.rank <= 3 THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*),0) AS three_rate
-FROM core.boat_info b
-JOIN core.results r ON b.race_key = r.race_key AND b.lane = r.lane
-GROUP BY b.racer_id, b.course
-WITH NO DATA;
-
 -- Indexes to speed joins on filtered_course
 CREATE INDEX IF NOT EXISTS idx_feat_filtered_course_reg_course
   ON feat.filtered_course (reg_no, course);
+CREATE INDEX IF NOT EXISTS idx_feat_filtered_course_reg_course_stadium
+  ON feat.filtered_course (reg_no, course, stadium);
 
 /* ---------- 予測用：ボート＋天候のフラットビュー ---------- */
 CREATE MATERIALIZED VIEW IF NOT EXISTS pred.boat_flat AS
@@ -67,13 +53,14 @@ DROP MATERIALIZED VIEW IF EXISTS pred.features CASCADE;
 /* ---------- 学習用特徴量（pred.features） ---------- */
 CREATE MATERIALIZED VIEW IF NOT EXISTS pred.features AS
 WITH flat AS (
-    SELECT bf.*, pr.race_date
+    SELECT bf.*, pr.race_date, pr.venue
     FROM pred.boat_flat bf
     JOIN core.pred_races pr USING (race_key)
 )
 SELECT
     race_key,
     MAX(race_date)   AS race_date,
+    MAX(venue)       AS venue,
     MAX(air_temp)    AS air_temp,
     MAX(wind_speed)  AS wind_speed,
     MAX(wave_height) AS wave_height,
@@ -141,17 +128,17 @@ DROP MATERIALIZED VIEW IF EXISTS pred.tf2_lane_stats;
 /* ---------- コース別レーン統計（pred.tf2_lane_stats） ---------- */
 CREATE MATERIALIZED VIEW IF NOT EXISTS pred.tf2_lane_stats AS
 WITH tf2_long AS (
-  SELECT race_key, 1 AS lane_no, lane1_racer_id AS reg_no, lane1_bf_course AS course FROM pred.features
+  SELECT race_key, 1 AS lane_no, lane1_racer_id AS reg_no, lane1_bf_course AS course, venue AS venue FROM pred.features
   UNION ALL
-  SELECT race_key, 2, lane2_racer_id, lane2_bf_course FROM pred.features
+  SELECT race_key, 2, lane2_racer_id, lane2_bf_course, venue FROM pred.features
   UNION ALL
-  SELECT race_key, 3, lane3_racer_id, lane3_bf_course FROM pred.features
+  SELECT race_key, 3, lane3_racer_id, lane3_bf_course, venue FROM pred.features
   UNION ALL
-  SELECT race_key, 4, lane4_racer_id, lane4_bf_course FROM pred.features
+  SELECT race_key, 4, lane4_racer_id, lane4_bf_course, venue FROM pred.features
   UNION ALL
-  SELECT race_key, 5, lane5_racer_id, lane5_bf_course FROM pred.features
+  SELECT race_key, 5, lane5_racer_id, lane5_bf_course, venue FROM pred.features
   UNION ALL
-  SELECT race_key, 6, lane6_racer_id, lane6_bf_course FROM pred.features
+  SELECT race_key, 6, lane6_racer_id, lane6_bf_course, venue FROM pred.features
 )
 SELECT
     l.race_key,
@@ -189,6 +176,7 @@ FROM tf2_long l
 LEFT JOIN feat.filtered_course fc
   ON fc.reg_no = l.reg_no
  AND fc.course = l.course
+ AND fc.stadium = l.venue
 GROUP BY l.race_key
 WITH NO DATA;
 
@@ -214,15 +202,59 @@ WITH NO DATA;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_predf3_race_key ON pred.features_with_record (race_key);
 CREATE INDEX IF NOT EXISTS idx_features_with_record_race_date ON pred.features_with_record (race_date);
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS pred.eval_with_record AS
+DROP MATERIALIZED VIEW IF EXISTS pred.eval_features_with_record CASCADE;
+CREATE MATERIALIZED VIEW IF NOT EXISTS pred.eval_features_with_record AS
+WITH ord AS (
+  SELECT
+    r.race_key,
+    r.lane,
+    r.rank,
+    ROW_NUMBER() OVER (PARTITION BY r.race_key ORDER BY r.rank, r.lane) AS ord
+  FROM core.results r
+  WHERE r.rank IS NOT NULL
+),
+pos AS (
+  SELECT
+    race_key,
+    MIN(lane) FILTER (WHERE ord = 1) AS first_lane,
+    MIN(lane) FILTER (WHERE ord = 2) AS second_lane,
+    MIN(lane) FILTER (WHERE ord = 3) AS third_lane
+  FROM ord
+  GROUP BY race_key
+),
+lanes_rank AS (
+  SELECT
+    race_key,
+    MAX(rank) FILTER (WHERE lane = 1) AS lane1_rank,
+    MAX(rank) FILTER (WHERE lane = 2) AS lane2_rank,
+    MAX(rank) FILTER (WHERE lane = 3) AS lane3_rank,
+    MAX(rank) FILTER (WHERE lane = 4) AS lane4_rank,
+    MAX(rank) FILTER (WHERE lane = 5) AS lane5_rank,
+    MAX(rank) FILTER (WHERE lane = 6) AS lane6_rank
+  FROM core.results
+  GROUP BY race_key
+)
 SELECT
-    tf.*,
-    o.first_lane,
-    o.second_lane,
-    o.third_lane,
-    o.odds
-FROM pred.features_with_record tf
-JOIN core.odds3t o USING (race_key)
+    pfr.*,
+    pos.first_lane,
+    pos.second_lane,
+    pos.third_lane,
+    lr.lane1_rank,
+    lr.lane2_rank,
+    lr.lane3_rank,
+    lr.lane4_rank,
+    lr.lane5_rank,
+    lr.lane6_rank,
+    (p.payout_yen / 100.0)       AS trifecta_odds,
+    p.popularity_rank            AS trifecta_popularity_rank
+FROM pred.features_with_record pfr
+LEFT JOIN pos USING (race_key)
+LEFT JOIN lanes_rank lr USING (race_key)
+LEFT JOIN core.payout3t p
+  ON p.race_key   = pfr.race_key
+ AND p.first_lane = pos.first_lane
+ AND p.second_lane = pos.second_lane
+ AND p.third_lane  = pos.third_lane
 WITH NO DATA;
 
 /* ---------- REFRESH 文 ---------- */
@@ -231,29 +263,15 @@ REFRESH MATERIALIZED VIEW pred.boat_flat;
 \echo '--- features 層のマテリアライズドビューを更新中 ---'
 REFRESH MATERIALIZED VIEW pred.features;
 \echo '--- filtered_course 層のマテリアライズドビューを更新中 ---'
-REFRESH MATERIALIZED VIEW feat.filtered_course;
-ANALYZE feat.filtered_course;
+-- REFRESH MATERIALIZED VIEW feat.filtered_course;
+-- ANALYZE feat.filtered_course;
 \echo '--- tf2_lane_stats 層のマテリアライズドビューを更新中 ---'
 REFRESH MATERIALIZED VIEW pred.tf2_lane_stats;
 \echo '--- features_with_record 層のマテリアライズドビューを更新中 ---'
 REFRESH MATERIALIZED VIEW pred.features_with_record;
-\echo '--- eval_with_record 層のマテリアライズドビューを更新中 ---'
-REFRESH MATERIALIZED VIEW pred.eval_with_record;
+\echo '--- eval_features_with_record 層のマテリアライズドビューを更新中 ---'
+REFRESH MATERIALIZED VIEW pred.eval_features_with_record;
 ANALYZE pred.boat_flat;
 ANALYZE pred.features;
 ANALYZE pred.tf2_lane_stats;
 ANALYZE pred.features_with_record;
-
-/* ---------- データ存在チェック ---------- */
-\echo '--- pred 層データ存在チェック ---'
-
-\echo '--- pred.boat_flat ---'
-SELECT COUNT(*) FROM pred.boat_flat;
-\echo '--- pred.features ---'
-SELECT COUNT(*) FROM pred.features;
-\echo '--- pred.tf2_lane_stats ---'
-SELECT COUNT(*) FROM pred.tf2_lane_stats;
-\echo '--- pred.features_with_record ---'
-SELECT COUNT(*) FROM pred.features_with_record;
-\echo '--- pred.eval_with_record ---'
-SELECT COUNT(*) FROM pred.eval_with_record;

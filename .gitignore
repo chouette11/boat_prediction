@@ -10,3 +10,5 @@ events.out.*
 download/lzh/
 download/txt/
 *.pth
+functions/venv/
+*.joblib

@@ -1,0 +1,501 @@
+from firebase_functions import https_fn
+from firebase_functions.options import set_global_options
+from firebase_admin import initialize_app, firestore
+from firebase_functions.options import MemoryOption
+import os
+import torch
+import torch.nn as nn
+import pandas as pd
+import joblib  # scalerの保存・読み込みにjoblibを使うのが一般的です
+from sklearn.preprocessing import StandardScaler
+import beforeinfo_to_features as bf
+from roi_util import ROIPredictor
+from DualHeadRanker import DualHeadRanker
+import traceback
+import get_limit
+from datetime import datetime, timedelta, timezone
+import result_html_to_message
+
+# --- Global inference options ---
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+TEMPERATURE = 0.80
+
+# LINE SDK
+try:
+    from linebot import LineBotApi
+    from linebot.models import TextSendMessage
+except Exception:
+    LineBotApi = None
+    TextSendMessage = None
+
+
+# --- グローバル設定 (変更なし) ---
+set_global_options(max_instances=10)
+initialize_app()
+
+# Firestore (Admin SDK)
+DB = firestore.client()
+
+# PyTorchモデルを読み込むヘルパー関数（場ごと）
+def load_pytorch_model(jcd: str | None = None):
+    class _RankOnly(nn.Module):
+        def __init__(self, base):
+            super().__init__()
+            self.base = base
+        def forward(self, *args, **kwargs):
+            _, rank_pred, _ = self.base(*args, **kwargs)
+            return rank_pred / TEMPERATURE
+
+    # 検索対象のディレクトリを場別→共通の順で決定
+    search_dirs = []
+    yyyymm  = datetime.now().strftime("%Y%m")
+    if jcd:
+        jcd_models_dir = os.path.join(f"models", jcd)
+        if os.path.isdir(jcd_models_dir):
+            search_dirs.append(jcd_models_dir)
+    search_dirs.append(f"models")  # フォールバック
+
+    model_path = None
+    model_list = []
+    for d in search_dirs:
+        try:
+            model_list = [os.path.join(d, f) for f in os.listdir(d) if f.endswith(".pth")]
+        except FileNotFoundError:
+            model_list = []
+        if model_list:
+            model_path = sorted(model_list)[-1]
+            break
+
+    if not model_path:
+        raise FileNotFoundError("No model checkpoint (.pth) found under per-venue or default 'models' directory.")
+
+    state = torch.load(model_path, map_location="cpu")
+
+    # find the correct weight key for boat_fc
+    key_candidates = [k for k in state.keys() if k.endswith("boat_fc.weight")]
+    if not key_candidates:
+        raise KeyError("'boat_fc.weight' not found in state dict keys: " + ", ".join(state.keys()))
+    w = state[key_candidates[0]]
+    total_in_from_ckpt = int(w.shape[1])  # TOTAL input dim into boat_fc in the checkpoint
+
+    # Read lane embedding dim from a temporary instance (independent of boat_in)
+    _tmp = DualHeadRanker(boat_in=1)
+    lane_dim = int(_tmp.lane_emb.embedding_dim)
+    del _tmp
+
+    # Our class defines: boat_fc.in_features = boat_in + lane_dim
+    # So choose boat_in to make boat_fc.in_features match the checkpoint
+    boat_in = total_in_from_ckpt - lane_dim
+    if boat_in <= 0:
+        print(f"[load][WARN] ckpt in_features={total_in_from_ckpt} < lane_dim={lane_dim}; using boat_in={total_in_from_ckpt} (legacy arch?)")
+        boat_in = total_in_from_ckpt
+
+    # Instantiate model to exactly match checkpoint's total in_features
+    model = DualHeadRanker(boat_in=boat_in)
+    print(f"[load] ({jcd or 'default'}) ckpt boat_fc.in_features(total)={total_in_from_ckpt}; lane_dim={lane_dim}; -> boat_in={boat_in}; model.boat_fc.in_features={model.boat_fc.in_features}")
+
+    # Strictly load weights
+    model.load_state_dict(state, strict=True)
+
+    model = model.to(DEVICE)
+
+    rank_model = _RankOnly(model)
+    return rank_model
+
+# スケーラー読み込み（場ごと対応）
+def load_scaler(jcd: str | None = None):
+    search_dirs = []
+    yyyymm  = datetime.now().strftime("%Y%m")
+    if jcd:
+        jcd_scalers_dir = os.path.join(f"scalers", jcd)
+        if os.path.isdir(jcd_scalers_dir):
+            search_dirs.append(jcd_scalers_dir)
+    search_dirs.append(f"scalers")  # フォールバック
+
+    scaler_path = None
+    for d in search_dirs:
+        try:
+            scaler_list = [f for f in os.listdir(d) if f.endswith(".joblib")]
+        except FileNotFoundError:
+            scaler_list = []
+        if scaler_list:
+            latest_scaler_file = sorted(scaler_list)[-1]
+            scaler_path = os.path.join(d, latest_scaler_file)
+            break
+
+    if not scaler_path:
+        raise FileNotFoundError("No scaler file (.joblib) found under per-venue or default 'scalers' directory.")
+
+    print(f"Using scaler: {scaler_path}")
+    return joblib.load(scaler_path)
+
+def send_line_message(text: str) -> None:
+    if not LINE_ACCESS_TOKEN or not LINE_TO_USER_ID:
+        print("[LINE] 環境変数 LINE_CHANNEL_ACCESS_TOKEN / LINE_TO_USER_ID が未設定のため送信をスキップします。")
+        return
+    if LineBotApi is None:
+        print("[LINE] line-bot-sdk がインポートできませんでした（requirements.txt に line-bot-sdk を追加してください）。")
+        return
+
+    try:
+        api = LineBotApi(LINE_ACCESS_TOKEN)
+        api.push_message(LINE_TO_USER_ID, TextSendMessage(text=text))
+        print("[LINE] push_message 成功")
+    except Exception:
+        print("[LINE] push_message 失敗")
+        traceback.print_exc()
+
+# --- Per-venue caches ---
+MODEL_CACHE: dict[str, nn.Module] = {}
+SCALER_CACHE: dict[str, StandardScaler] = {}
+PREDICTOR_CACHE: dict[str, ROIPredictor] = {}
+
+NUM_COLS = ["air_temp", "wind_speed", "wave_height", "water_temp", "wind_sin", "wind_cos"]
+
+
+def get_predictor_for_jcd(jcd: str | None) -> ROIPredictor:
+    """場コードごとにモデル/スケーラー/予測器をキャッシュして返す。jcd が None の場合は共通を使う。"""
+    key = jcd or "__default__"
+    if key in PREDICTOR_CACHE:
+        return PREDICTOR_CACHE[key]
+
+    # lazy load
+    model = MODEL_CACHE.get(key)
+    if model is None:
+        model = load_pytorch_model(jcd=jcd)
+        MODEL_CACHE[key] = model
+
+    scaler = SCALER_CACHE.get(key)
+    if scaler is None:
+        scaler = load_scaler(jcd=jcd)
+        SCALER_CACHE[key] = scaler
+
+    predictor = ROIPredictor(model=model, scaler=scaler, num_cols=NUM_COLS, device=DEVICE, batch_size=512)
+    PREDICTOR_CACHE[key] = predictor
+    print(f"[predictor] initialized for jcd={jcd or 'default'} (cache size: {len(PREDICTOR_CACHE)})")
+    return predictor
+
+# --- グローバル変数の定義 ---
+# コンテナ起動時に一度だけ実行される
+try:
+    print("--- Starting to initialize globals (lazy per-venue loading) ---")
+    # 予測器は場ごとに遅延ロードするので、ここではロードしない
+    LINE_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
+    LINE_TO_USER_ID = os.getenv("LINE_TO_USER_ID")
+    if not LINE_ACCESS_TOKEN or not LINE_TO_USER_ID:
+        print("[WARNING] LINE_CHANNEL_ACCESS_TOKEN or LINE_TO_USER_ID environment variable is not set. LINE notifications will be disabled.")
+    else:
+        print("[INFO] LINE_CHANNEL_ACCESS_TOKEN and LINE_TO_USER_ID are set. LINE notifications are enabled.")
+    print("--- Global objects initialized (device={}, lazy per-venue caches active). ---".format(DEVICE))
+except Exception as e:
+    import traceback
+    print(f"!!!!!!!! AN ERROR OCCURRED DURING GLOBAL LOADING !!!!!!!")
+    print(f"ERROR TYPE: {type(e).__name__}")
+    print(f"ERROR MESSAGE: {e}")
+    print("--- TRACEBACK ---")
+    traceback.print_exc()
+
+# 通知の実行タイミング（締切何分前か）を環境変数で設定
+BEFORE_MINUTES = int(os.getenv("RACE_NOTIFY_BEFORE_MINUTES", "5"))
+
+@https_fn.on_request(memory=MemoryOption.GB_2)
+def check_race_notifications(req: https_fn.Request) -> https_fn.Response:
+    """
+    Cloud Scheduler 等から定期的に呼び出されるハンドラー。
+    現在時刻がレース締切の BEFORE_MINUTES 分前〜締切時刻までの範囲に入っていれば
+    on_request_example(None) を実行してLINE通知を行う。
+    """
+    for i in (1, 7, 12, 15, 19, 20, 24):
+        jcd = f"0{i}" if i < 10 else str(i)
+        # --- 1日1回だけダウンロードするための日次キャッシュ（Firestore） ---
+        jst = timezone(timedelta(hours=9))
+        now_jst = datetime.now(jst)
+        today_hd = now_jst.strftime("%Y%m%d")
+        daily_doc_id = f"{jcd}_{today_hd}"
+
+        # まずは Firestore の日次キャッシュを試す
+        closing_times = None
+        try:
+            daily_doc = DB.collection("closing_time_daily").document(daily_doc_id).get()
+            if daily_doc.exists:
+                payload = daily_doc.to_dict()
+                closing_times = payload.get("items") or []
+                print(f"[cache] Using cached closing times for {daily_doc_id} (count={len(closing_times)})")
+        except Exception as e:
+            print(f"[firestore] failed to read daily cache for {daily_doc_id}: {e}")
+
+        # キャッシュが無ければダウンロード → Firestore に保存
+        if not closing_times:
+            try:
+                closing_times = get_limit.extract_closing_times(jcd=jcd)
+                DB.collection("closing_time_daily").document(daily_doc_id).set({
+                    "jcd": jcd,
+                    "hd": today_hd,
+                    "count": len(closing_times),
+                    "items": closing_times,
+                    "fetchedAt": firestore.SERVER_TIMESTAMP,
+                }, merge=True)
+                print(f"[fetch] Downloaded and cached closing times for {daily_doc_id} (count={len(closing_times)})")
+            except Exception as e:
+                msg = f"[check] Failed to fetch closing times: {e}"
+                print(msg)
+                return https_fn.Response(msg, status=500)
+        print('ナウ', now_jst.isoformat())
+        print('締切一覧', closing_times)
+        for item in closing_times:
+            if item == "Not held":
+                continue
+            iso = item.get("iso_jst")
+            rno = item.get("rno")
+
+            # Firestore: upsert closing time document
+            doc_id = f"{item.get('jcd')}_{item.get('hd')}_{item.get('rno')}"
+
+            if not iso:
+                continue
+            dt = datetime.fromisoformat(iso)         # JST(+09:00) のawareなdatetime
+            now_tz = now_jst.replace(tzinfo=dt.tzinfo)
+            notify_start = dt - timedelta(minutes=BEFORE_MINUTES)
+
+            # Firestore: skip if already notified for this race
+            notif_doc_id = doc_id
+            try:
+                notif_doc = DB.collection("race_notifications").document(notif_doc_id).get()
+                if notif_doc.exists and notif_doc.to_dict().get("sent"):
+                    print(f"[check] Already notified for {notif_doc_id}; skipping.")
+                    continue
+            except Exception as e:
+                print(f"[firestore] notification doc read failed for {notif_doc_id}: {e}")
+
+            print(notify_start, now_tz, dt, rno)
+
+            if notify_start <= now_tz <= dt:
+                req = {
+                    "jcd": item.get("jcd"),
+                    "hd": item.get("hd"),
+                    "rno": rno,
+                    "closing_time": iso,
+                    "fs_notif_doc_id": notif_doc_id,
+                }
+                on_request_example(req)              # 予測とLINE送信を実行
+
+    return https_fn.Response("End check", status=200)
+
+# --- HTTPリクエストを処理する関数 ---
+@https_fn.on_request(memory=MemoryOption.GB_2)
+def on_request_example(req: https_fn.Request) -> https_fn.Response:
+    fs_notif_doc_id = req.get("fs_notif_doc_id")
+    threshold_dict = {
+        "01": (0.20, 0.30),  # 桐生
+        "07": (0.16, 0.28),  # 蒲郡
+        "12": (0.116, 0.20), # 住之江
+        "15": (0.35, 0.45),  # 丸亀
+        "19": (0.27, 0.40),  # 下関
+        "20": (0.22, 0.25),  # 若松
+        "24": (0.15, 0.22),  # 大村
+    }
+    features_df = bf.main(rno=req.get("rno"), jcd=req.get("jcd"))
+    print(f"[predict] Features shape: {features_df.shape}")
+    if features_df.empty:
+        print("[predict] No rows fetched for the specified period.")
+
+    exclude = []
+    for lane in range(1, 7):
+        # 実際に存在するカラム名に合わせてください
+        exclude.append(f"lane{lane}_bf_course")
+        exclude.append(f"lane{lane}_bf_st_time")
+        exclude.append(f"lane{lane}_weight")
+        # 他にも学習時に使っていない特徴量があれば追加
+
+    # errors='ignore' をつけて、存在しない列があってもエラーにならないようにする
+    features_df.drop(columns=exclude, inplace=True, errors="ignore")
+
+    # ★ 場ごとのPREDICTORを取得して使用する
+    predictor = get_predictor_for_jcd(req.get("jcd"))
+    pred_scores_df = predictor.predict_scores(features_df, include_meta=True)
+    pred_probs_df = predictor.predict_win_probs(scores_df=pred_scores_df, include_meta=True)
+    exa_df, tri_df = predictor.predict_exotics_topk(scores_df=pred_scores_df, K=10, tau=1.0, include_meta=True)
+    print(f"[predict] Prediction completed. Scores shape: {pred_scores_df.shape}, Win probs shape: {pred_probs_df.shape}")
+    print(f"[predict] Example Scores:\n{pred_scores_df.head()}")
+    print(f"[predict] Example Win Probs:\n{pred_probs_df.head()}")
+    print(f"[predict] Example Exactas:\n{exa_df.head()}")
+    print(f"[predict] Example Trifectas:\n{tri_df.head()}")
+    # tri_dfのprob列の1行目を取得
+    if not tri_df.empty:
+        top_tri_prob = tri_df.iloc[0]['prob']
+        top_trifecta = tri_df.iloc[0]['trifecta']
+        threshold = threshold_dict.get(req.get("jcd"))[0]
+        probs_dict = {}
+        for i in range(10):
+            probs_dict[tri_df.iloc[i]['trifecta']] = tri_df.iloc[i]['prob'] if i < len(tri_df) else None
+        if top_tri_prob > threshold:
+            jcd = req.get("jcd")
+            hd = req.get("hd")
+            rno = req.get("rno")
+            if jcd and hd and rno:
+                mes = ""
+                if jcd == "15":
+                    mes = "三連単"
+                max_prob = threshold_dict.get(jcd)[1]
+                send_line_message(f"{jcd}, {hd}, {rno}, Top Trifecta: {top_trifecta} Probability: {top_tri_prob:.4f} percent {(top_tri_prob-threshold)/(max_prob-threshold):.4f}\n{mes}\nhttps://www.boatrace.jp/owpc/pc/race/raceresult?rno={rno}&jcd={jcd}&hd={hd}")
+                print(f"[predict] Top Trifecta: {top_trifecta} with Probability: {top_tri_prob}")
+                try:
+                    notif_doc_id = fs_notif_doc_id or f"{jcd}_{hd}_{rno}"
+                    DB.collection("race_notifications").document(notif_doc_id).set({
+                        "jcd": jcd,
+                        "hd": hd,
+                        "rno": rno,
+                        "closing_time": req.get("closing_time"),
+                        "sent": True,
+                        "sentAt": firestore.SERVER_TIMESTAMP,
+                        "tri": top_trifecta,
+                        "prob": float(top_tri_prob),
+                        "result_url": f"https://www.boatrace.jp/owpc/pc/race/raceresult?rno={rno}&jcd={jcd}&hd={hd}",
+                        "features": features_df.to_dict(orient="records"),
+                        "probs_dict": probs_dict,
+                    }, merge=True)
+                except Exception as e:
+                    print(f"[firestore] failed to mark notification sent for {notif_doc_id}: {e}")
+        else:
+            jcd = req.get("jcd")
+            hd = req.get("hd")
+            rno = req.get("rno")
+            try:
+                doc_id = fs_notif_doc_id or f"{jcd}_{hd}_{rno}"
+                DB.collection("race_notifications").document(doc_id).set({
+                    "jcd": jcd,
+                    "hd": hd,
+                    "rno": rno,
+                    "closing_time": req.get("closing_time"),
+                    "sent": False,
+                    "lastEvaluatedAt": firestore.SERVER_TIMESTAMP,
+                    "tri": top_trifecta,
+                    "topTriProb": float(top_tri_prob),
+                    "result_url": f"https://www.boatrace.jp/owpc/pc/race/raceresult?rno={rno}&jcd={jcd}&hd={hd}",
+                    "features": features_df.to_dict(orient="records"),
+                    "probs_dict": probs_dict,
+                }, merge=True)
+            except Exception as e:
+                print(f"[firestore] failed to update evaluation for {doc_id}: {e}")
+            print("[predict] Top trifecta probability is below threshold; no notification sent.")
+    else:
+        print("[predict] No trifecta predictions available.")
+
+    # TODO: 予測結果をDBに保存したり、レスポンスとして返したりする処理
+    print("Prediction completed successfully.")
+
+    return https_fn.Response(f"top_trifecta = {tri_df.iloc[0]['trifecta']}.", status=200)
+
+JST = timezone(timedelta(hours=9))
+
+# === 日次サマリ通知エンドポイント ===
+@https_fn.on_request(memory=MemoryOption.GB_2)
+def send_daily_summary(req: https_fn.Request) -> https_fn.Response:
+    """
+    既定: 昨日(JST)の結果を通知。
+    かつ、昨日が日曜日なら週次サマリ（Mon–Sun）を、月末なら月次サマリ（当月1日〜昨日）を追加で通知。
+    ?hd=YYYYMMDD を指定した場合はその日を基準日とする（force再送は ?force=true）。
+    """
+    try:
+        # パラメータ
+        hd = None
+        force = False
+        try:
+            hd = req.get("hd")
+            force = str(req.get("force")).lower() in ("1", "true", "yes")
+        except Exception:
+            pass
+
+        now_jst = datetime.now(JST)
+        if hd:
+            try:
+                target_date = datetime.strptime(hd, "%Y%m%d").date()
+            except Exception:
+                return https_fn.Response(f"invalid hd: {hd}", status=400)
+        else:
+            # 既定は「昨日」
+            target_date = (now_jst - timedelta(days=1)).date()
+            hd = target_date.strftime("%Y%m%d")
+
+        # 重複送信ガード
+        summary_doc_ref = DB.collection("daily_summaries").document(hd)
+        already = False
+        try:
+            snap = summary_doc_ref.get()
+            if snap.exists and snap.to_dict().get("sent") and not force:
+                already = True
+        except Exception as e:
+            print(f"[firestore] failed to read daily_summaries/{hd}: {e}")
+
+        messages = []
+
+        # --- 日次（昨日） ---
+        if not already or force:
+            # HTMLダウンロード・抽出は result_html_to_message に委譲
+            summary, message = result_html_to_message.daily_main(hd, DB)
+            messages.append(message)
+
+            # 送信
+            try:
+                send_line_message(message)
+            except Exception as e:
+                print(f"[LINE] daily summary send failed: {e}")
+
+            # Firestore 保存
+            try:
+                summary_doc_ref.set({**summary, "hd": hd, "sent": True}, merge=True)
+            except Exception as e:
+                print(f"[firestore] failed to write daily_summaries/{hd}: {e}")
+        else:
+            messages.append(f"[daily] {hd} は既に送信済みです。?force=true で再送できます。")
+
+        # --- 週次（昨日が日曜日なら Mon–Sun） ---
+        if target_date.weekday() == 6:
+            week_start = target_date - timedelta(days=6)
+            week_end = target_date
+            wsum, wmsg = result_html_to_message.weekly_main(week_start, week_end, DB)
+            messages.append(wmsg)
+            try:
+                send_line_message(wmsg)
+            except Exception as e:
+                print(f"[LINE] weekly summary send failed: {e}")
+            try:
+                DB.collection("weekly_summaries").document(
+                    f"{week_start.strftime('%Y%m%d')}_{week_end.strftime('%Y%m%d')}"
+                ).set({
+                    **wsum,
+                    "hd_from": week_start.strftime("%Y%m%d"),
+                    "hd_to": week_end.strftime("%Y%m%d"),
+                    "sent": True,
+                }, merge=True)
+            except Exception as e:
+                print(f"[firestore] failed to write weekly_summaries: {e}")
+
+        # --- 月次（昨日が月末なら 1日〜昨日） ---
+        if (target_date + timedelta(days=1)).month != target_date.month:
+            month_start = target_date.replace(day=1)
+            month_end = target_date
+            msum, mmsg = result_html_to_message.monthly_main(month_start, month_end, DB)
+            messages.append(mmsg)
+            try:
+                send_line_message(mmsg)
+            except Exception as e:
+                print(f"[LINE] monthly summary send failed: {e}")
+            try:
+                DB.collection("monthly_summaries").document(
+                    f"{month_start.strftime('%Y%m')}"
+                ).set({
+                    **msum,
+                    "ym": month_start.strftime("%Y%m"),
+                    "hd_from": month_start.strftime("%Y%m%d"),
+                    "hd_to": month_end.strftime("%Y%m%d"),
+                    "sent": True,
+                }, merge=True)
+            except Exception as e:
+                print(f"[firestore] failed to write monthly_summaries: {e}")
+
+        return https_fn.Response("\n\n".join(messages), status=200)
+
+    except Exception as e:
+        traceback.print_exc()
+        return https_fn.Response(f"daily summary failed: {e}", status=500)

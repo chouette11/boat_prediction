@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[ ]:
+# In[70]:
 
 
 import sys
@@ -79,7 +79,7 @@ register_feature(FeatureDef("wind_sin", _wind_sin, deps=["wind_dir_deg"]))
 register_feature(FeatureDef("wind_cos", _wind_cos, deps=["wind_dir_deg"]))
 
 
-# In[ ]:
+# In[71]:
 
 
 import nbformat
@@ -88,21 +88,21 @@ from nbconvert import PythonExporter
 if len(sys.argv[1]) < 4:
     pass
 else :
-    with open("main_base.ipynb", "r", encoding="utf-8") as f:
+    with open("main_comp.ipynb", "r", encoding="utf-8") as f:
         nb = nbformat.read(f, as_version=4)
 
     exporter = PythonExporter()
     source, _ = exporter.from_notebook_node(nb)
 
-    with open("main_base.py", "w", encoding="utf-8") as f:
+    with open("main_comp.py", "w", encoding="utf-8") as f:
         f.write(source)
 
 
-# In[ ]:
+# In[72]:
 
 
 load_dotenv(override=True)
-venue = '若 松'
+venue = '桐 生'
 if len(sys.argv[1]) < 4:
     venue = sys.argv[1]
 print(f"Venue: {venue}")
@@ -115,20 +115,23 @@ DB_CONF = {
     "user":     os.getenv("PGUSER", "br_user"),
     "password": os.getenv("PGPASSWORD", "secret"),
 }
-print("DB Config:", DB_CONF)
 
 # Use short‑lived connection to avoid leaks
+
+# 先月の最終日
+last_date = dt.date.today().replace(day=1) - dt.timedelta(days=1)
+print(f"Loading data up to {last_date}...")
 with psycopg2.connect(**DB_CONF) as conn:
     result_df = pd.read_sql(f"""
         SELECT * FROM feat.train_features_base
-        WHERE race_date <= '2025-10-01'
+        WHERE race_date <= '{last_date}'
         AND venue = '{venue}'
     """, conn)
 
 print(f"Loaded {len(result_df)} rows from the database.")
 
 
-# In[ ]:
+# In[73]:
 
 
 result_df = apply_features(result_df)
@@ -162,7 +165,7 @@ print(missing_ratio_percent.sort_values(ascending=False))
 os.makedirs("artifacts", exist_ok=True)
 
 
-# In[ ]:
+# In[74]:
 
 
 # ---------------- Loss / Regularization Weights -----------------
@@ -189,7 +192,7 @@ else:
 print(f"TOPK_WEIGHTS: {TOPK_WEIGHTS}")
 
 
-# In[ ]:
+# In[75]:
 
 
 def pl_nll(scores: torch.Tensor, ranks: torch.Tensor, reduce: bool = True) -> torch.Tensor:
@@ -259,7 +262,7 @@ print("pl_nll should be ~0 :", pl_nll(scores, ranks).item())
 print("pl_nll_topk (k=3) should be ~0 :", pl_nll_topk(scores, ranks, k=TOPK_K, weights=TOPK_WEIGHTS).item())
 
 
-# In[ ]:
+# In[76]:
 
 
 def choose_val_cutoff(
@@ -318,11 +321,11 @@ jcd_dict = {
 }
 now = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
 jcd = jcd_dict[venue]
-yyymm  = dt.datetime.now().strftime("%Y%m")
-os.makedirs(f"artifacts/scalers_{yyymm}/{jcd}", exist_ok=True)
-os.makedirs(f"../functions/scalers_{yyymm}/{jcd}", exist_ok=True)
-joblib.dump(scaler, f"artifacts/scalers_{yyymm}/{jcd}/scaler_{now}.joblib")
-joblib.dump(scaler, f"../functions/scalers_{yyymm}/{jcd}/scaler_{now}.joblib")
+yyyymm = dt.datetime.now().strftime("%Y%m")
+os.makedirs(f"artifacts/scalers_{yyyymm}/{jcd}", exist_ok=True)
+os.makedirs(f"../functions/scalers_{yyyymm}/{jcd}", exist_ok=True)
+joblib.dump(scaler, f"artifacts/scalers_{yyyymm}/{jcd}/scaler_{now}.joblib")
+joblib.dump(scaler, f"../functions/scalers_{yyyymm}/{jcd}/scaler_{now}.joblib")
 
 mode = "zscore"  
 ds_train = BoatRaceDatasetBase(df_tr)
@@ -343,7 +346,7 @@ model = DualHeadRanker(boat_in=boat_dim).to(device)
 opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=5e-5)
 
 
-# In[ ]:
+# In[77]:
 
 
 def evaluate_model(model, dataset, device):
@@ -362,96 +365,7 @@ def evaluate_model(model, dataset, device):
     return total_loss / len(dataset)
 
 
-# def run_experiment(data_frac, df_full, mode="zscore", epochs=5, device="cpu"):
-#     df_frac = df_full.sample(frac=data_frac, random_state=42)
-#     df_frac["race_date"] = pd.to_datetime(df_frac["race_date"]).dt.date
-#     latest_date = df_frac["race_date"].max()
-#     cutoff = latest_date - dt.timedelta(days=90)  # last 3 months used as validation set
-#     ds_train = BoatRaceDatasetBase(df_frac[df_frac["race_date"] < cutoff])
-#     ds_val = BoatRaceDatasetBase(df_frac[df_frac["race_date"] >= cutoff])
-
-#     loader_train = DataLoader(ds_train, batch_size=256, shuffle=True)
-#     loader_val = DataLoader(ds_val, batch_size=512)
-
-#     boat_dim = ds_train.boat_dim
-#     model = DualHeadRanker(boat_in=boat_dim).to(device)
-#     opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=5e-5)
-
-#     for epoch in range(epochs):
-#         model.train()
-#         for ctx, boats, lane_ids, ranks, *_ in loader_train:
-#             ctx, boats = ctx.to(device), boats.to(device)
-#             lane_ids, ranks = lane_ids.to(device), ranks.to(device)
-
-#             _, scores, _ = model(ctx, boats, lane_ids)        # discard ST & win head
-#             loss = (pl_nll(scores, ranks, reduce=False) *
-#                     torch.where(ranks[:,0]==1,
-#                                 torch.tensor(1.0, device=ranks.device),
-#                                 torch.tensor(1.5, device=ranks.device))).mean()
-#             opt.zero_grad(); loss.backward(); opt.step()
-
-#     train_loss = evaluate_model(model, ds_train, device)
-#     val_loss = evaluate_model(model, ds_val, device)
-#     return train_loss, val_loss
-
-# # 学習曲線の描画
-# def plot_learning_curve(df, device):
-#     data_fracs = [0.01, 0.05, 0.1, 0.2, 0.5, 1.0]
-#     results = []
-
-#     for frac in data_fracs:
-#         tr_loss, val_loss = run_experiment(frac, df, device=device)
-#         print(f"Data frac {frac:.2f} → Train: {tr_loss:.4f} / Val: {val_loss:.4f}")
-#         results.append((frac, tr_loss, val_loss))
-
-#     fracs, tr_losses, val_losses = zip(*results)
-#     plt.plot(fracs, tr_losses, label="Train Loss")
-#     plt.plot(fracs, val_losses, label="Val Loss")
-#     plt.xlabel("Training Data Fraction")
-#     plt.ylabel("Loss")
-#     plt.title("Learning Curve")
-#     plt.legend()
-#     plt.grid(True)
-#     plt.show()
-
-# def overfit_tiny(df: pd.DataFrame, device: str = "cpu"):
-#     """
-#     データセットを 10 行だけに縮小し、500 step で過学習できるか検証
-#     """
-#     tiny_df = df.sample(10, random_state=1).reset_index(drop=True)
-#     tiny_ds = BoatRaceDatasetBase(tiny_df)
-#     tiny_loader = DataLoader(tiny_ds, batch_size=10, shuffle=True)
-
-#     net = DualHeadRanker().to(device)
-#     opt = torch.optim.AdamW(net.parameters(), lr=3e-3)
-
-#     for _ in range(500):
-#         ctx, boats, lane_ids, ranks, st_true, st_mask = next(iter(tiny_loader))
-#         ctx, boats = ctx.to(device), boats.to(device)
-#         lane_ids, ranks = lane_ids.to(device), ranks.to(device)
-#         st_true, st_mask = st_true.to(device), st_mask.to(device)
-#         st_pred, scores, _ = net(ctx, boats, lane_ids)
-#         pl_loss = (pl_nll(scores, ranks, reduce=False) *
-#                    torch.where(ranks[:,0]==1,
-#                                torch.tensor(1.0, device=ranks.device),
-#                                torch.tensor(1.5, device=ranks.device))).mean()
-#         mse_st = ((st_pred - st_true) ** 2 * st_mask.float()).sum() / st_mask.float().sum()
-#         loss = pl_loss + LAMBDA_ST * mse_st
-#         opt.zero_grad(); loss.backward(); opt.step()
-
-#     print("[tiny] final loss:", loss.item())
-
-# RUN_DIAG = True
-
-# if RUN_DIAG:
-#     print("[diag] Running learning‑curve vs. data fraction …")
-#     plot_learning_curve(result_df, device)
-#     print("[diag] Running 10‑row overfit_tiny() …")
-#     overfit_tiny(result_df, device)
-#     print("[diag]   ► finished quick diagnostics\n")
-
-
-# In[ ]:
+# In[78]:
 
 
 EPOCHS = 20
@@ -558,7 +472,7 @@ torch.save(model.state_dict(), model_path2)
 print(f"Model saved to {model_path}")
 
 
-# In[ ]:
+# In[79]:
 
 
 # ---- Monkey‑patch ROIAnalyzer so it uses BoatRaceDataset2 (MTL) ----------
@@ -566,52 +480,20 @@ from types import MethodType
 from BoatRaceDataset_base import BoatRaceDatasetBase 
 from torch.utils.data import DataLoader
 from roi_util import ROIAnalyzer
-import datetime as dt
-import psycopg2
-import os
-import pandas as pd
 
-#  # 最新のモデルを取得
-# model_list = os.listdir("artifacts/models")
-# model_list = [f for f in model_list if f.endswith(".pth")]
-# if model_list:
-#     latest_model = sorted(model_list)[-1]  # 最新のモデルを選択
-#     model_path = os.path.join("artifacts", "models", latest_model)
-#     print(f"Using latest model: {model_path}")
-#     # モデルをロード
-#     model = DualHeadRanker(boat_in=boat_dim)
-#     model.load_state_dict(torch.load(model_path, map_location=device))
-
-if False:
-    venue = '若 松'
 today = dt.date.today()
-start_date = dt.date(2025, 11, 1)
-end = dt.date(2025, 11, 30)
+start_date = (today.replace(day=1) - dt.timedelta(days=1)).replace(day=1)# 先月の最終日
+last_day_prev_month = today.replace(day=1) - dt.timedelta(days=1)
+print(start_date, last_day_prev_month)
 
 query = f"""
     SELECT * FROM feat.eval_features_base
-    WHERE race_date BETWEEN '{start_date}' AND '{today}'
+    WHERE race_date BETWEEN '2025-09-01' AND '{last_day_prev_month}'
     AND venue = '{venue}'
 """
-
-DB_CONF = {
-    "host":     os.getenv("PGHOST", "localhost"),
-    "port":     int(os.getenv("PGPORT", 5432)),
-    "dbname":   os.getenv("PGDATABASE", "boatrace"),
-    "user":     os.getenv("PGUSER", "br_user"),
-    "password": os.getenv("PGPASSWORD", "secret"),
-}
 with psycopg2.connect(**DB_CONF) as conn:
     df_recent = pd.read_sql(query, conn)
 print(df_recent)
-
-exclude = []
-for lane in range(1, 7):
-      exclude.append(
-            f"lane{lane}_bf_course",
-      )
-      exclude.append(f"lane{lane}_bf_st_time")
-      exclude.append(f"lane{lane}_weight")
 
 df_recent.drop(columns=exclude, inplace=True, errors="ignore")
 df_recent.to_csv(f"artifacts/{venue}/eval_features_recent_{venue}.csv", index=False)
@@ -619,7 +501,7 @@ print(f"[simulate] Loaded {len(df_recent)} rows ({start_date} – {today}).")
 print(f"columns: {', '.join(df_recent.columns)}")
 
 
-# In[ ]:
+# In[80]:
 
 
 class _RankOnly(nn.Module):
@@ -674,120 +556,7 @@ else:
     all_ranks  = torch.cat(all_ranks,  dim=0)   # (N,6)
 
 
-# In[ ]:
-
-
-# # --------------------------------------------------------------------------
-# #  グループ Ablation: 重要列を 5～6 個まとめてドロップして val_nll を比較
-# # --------------------------------------------------------------------------
-# def permute_importance(model, dataset, device="cpu", cols=None):
-#     """
-#     Permutation importance: 各特徴量列をランダムに permute して val_nll の悪化量を調べる
-#     """
-#     base_loss = evaluate_model(model, dataset, device)
-
-#     # ----- 列リストを決める --------------------------------------------------
-#     # cols=None なら「データフレームに存在する “使えそうな” 全列」を対象にする
-#     if cols is None:
-#         # 予測ターゲットやキー列は除外
-#         skip = {"race_key", "race_date"}
-#         # rank 列（教師信号）や欠損だらけの列も除外
-#         skip |= {c for c in dataset.f.columns if c.endswith("_rank")}
-#         cols = [c for c in dataset.f.columns if c not in skip]
-
-#     importances: dict[str, float] = {}
-#     df_full = dataset.f
-
-#     for col in cols:
-#         # --- その列だけランダムに permute ---
-#         shuffled = df_full.copy()
-#         shuffled[col] = np.random.permutation(shuffled[col].values)
-#         tmp_ds = BoatRaceDatasetBase(shuffled)
-#         loss = evaluate_model(model, tmp_ds, device)
-#         importances[col] = loss - base_loss   # 悪化分 (大 → 重要)
-#     return importances
-
-# def run_ablation_groups(
-#     df_full: pd.DataFrame,
-#     group_size: int = 6,
-#     epochs: int = 5,
-#     seed: int = 42,
-#     device: str = "cpu",
-# ):
-#     """
-#     全特徴量をランダムに group_size 個ずつ束ね、
-#     そのグループを丸ごと削除して再学習 → val_nll を返す。
-
-#     戻り値: list[tuple[list[str], float]]
-#         (ドロップした列リスト, val_nll) を val_nll 昇順で並べたもの
-#     """
-#     random.seed(seed)
-
-#     essential_cols = set(NUM_COLS)          # ctx 用の連続値
-#     for l in range(1, 7):
-#         essential_cols.update({
-#             f"lane{l}_exh_time",
-#             f"lane{l}_st",
-#             f"lane{l}_weight",
-#             f"lane{l}_bf_course",
-#             f"lane{l}_fs_flag",
-#             f"lane{l}_racer_id",
-#             f"lane{l}_racer_name",
-#             f"lane{l}_racer_age",
-#             f"lane{l}_racer_weight",
-#         })
-#     # --- 対象列を決める（ターゲット & キー列は除外） ---
-#     skip = {"race_key", "race_date"}
-#     skip |= {c for c in df_full.columns if c.endswith("_rank")}
-#     skip |= essential_cols  
-#     skip |= {c for c in df_full.columns if c.endswith("_rank")}
-#     cols = [c for c in df_full.columns if c not in skip]
-#     random.shuffle(cols)
-
-#     groups = [cols[i : i + group_size] for i in range(0, len(cols), group_size)]
-#     results = []
-
-#     latest_date = pd.to_datetime(df_full["race_date"]).dt.date.max()
-#     cutoff = latest_date - dt.timedelta(days=90)
-
-#     for g in groups:
-#         df_drop = df_full.drop(columns=g)
-
-#         ds_tr = BoatRaceDatasetBase(df_drop[df_drop["race_date"] < cutoff])
-#         ds_va = BoatRaceDatasetBase(df_drop[df_drop["race_date"] >= cutoff])
-
-#         ld_tr = DataLoader(ds_tr, batch_size=256, shuffle=True)
-#         ld_va = DataLoader(ds_va, batch_size=512)
-
-#         model = DualHeadRanker(boat_in=ds_tr.boat_dim).to(device)
-#         opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=5e-5)
-
-#         for _ in range(epochs):
-#             model.train()
-#             for ctx, boats, lane_ids, ranks, st_true, st_mask in ld_tr:
-#                 ctx, boats = ctx.to(device), boats.to(device)
-#                 lane_ids, ranks = lane_ids.to(device), ranks.to(device)
-                
-#                 st_true, st_mask = st_true.to(device), st_mask.to(device)
-#                 st_pred, scores, _ = model(ctx, boats, lane_ids)
-#                 pl_loss = pl_nll_topk(scores, ranks, k=TOPK_K, weights=TOPK_WEIGHTS)
-#                 mse_st = ((st_pred - st_true) ** 2 * st_mask.float()).sum() / st_mask.float().sum()
-#                 loss = pl_loss + LAMBDA_ST * mse_st
-#                 opt.zero_grad(); loss.backward(); opt.step()
-
-#         val_loss = evaluate_model(model, ds_va, device)
-#         results.append((g, val_loss))
-
-#     return sorted(results, key=lambda x: x[1])  # 小さい順に重要
-
-# print("▼ Permutation importance (ALL features)")
-# all_imp = permute_importance(model, ds_val, device)
-# imp_path = f"artifacts/{venue}/perm_importance_all_{venue}.csv"
-# pd.Series(all_imp).sort_values(ascending=False).to_csv(imp_path)
-# print(f"[saved] {imp_path}")
-
-
-# In[ ]:
+# In[81]:
 
 
 df_scores = pd.DataFrame(all_scores.numpy(), columns=[f"lane{i}_score" for i in range(1, 7)])
@@ -982,7 +751,7 @@ for n in range(1, 6):
 
 
 
-# In[ ]:
+# In[82]:
 
 
 def top1_accuracy(scores: torch.Tensor, ranks: torch.Tensor) -> float:
@@ -1223,7 +992,7 @@ with open(metrics_path, "a", newline="") as f:
 print(f"[saved] {metrics_path}")
 
 
-# In[ ]:
+# In[83]:
 
 
 # === 条件別ヒット率/ROI 分析（修正版） =========================
@@ -1832,69 +1601,7 @@ except Exception as e:
 # ======================================================================
 
 
-# In[ ]:
-
-
-# prediction
-from roi_util import ROIPredictor
-import pandas as pd
-import datetime as dt
-
-today = dt.date.today()
-# 2025年1月1日以降のデータを取得する場合は、以下の行を変更してください。
-start_date = dt.date(2025, 1, 11)
-end = dt.date(2025, 8, 12)
-
-query = f"""
-    SELECT * FROM pred.features_with_record
-    WHERE race_date BETWEEN '{start_date}' AND '{today}'
-    AND venue = '{venue}'
-"""
-
-with psycopg2.connect(**DB_CONF) as conn:
-    df_recent = pd.read_sql(query, conn)
-
-df_recent['air_temp'] = None
-df_recent['water_temp'] = None
-# wave_heightを0.01倍
-if 'wave_height' in df_recent.columns:
-    df_recent['wave_height'] = df_recent['wave_height'] * 0.01
-print(df_recent)
-df_recent.to_csv("artifacts/pred_features_recent.csv", index=False)
-
-df_recent.drop(columns=exclude, inplace=True, errors="ignore")
-
-if df_recent.empty:
-    print("[predict] No rows fetched for the specified period.")
-
-print(f"[predict] Loaded {len(df_recent)} rows ({start_date} – {today}).")
-print(f"columns: {', '.join(df_recent.columns)}")
-
-# ------------------------------
-# ROIPredictor でスコア＆確率を一括生成
-# ------------------------------
-predictor = ROIPredictor(model=rank_model, scaler=scaler,
-                         num_cols=NUM_COLS, device=device, batch_size=512)
-
-# (1) スコア（logits）: lane1_score..lane6_score (+ メタ列) を保存
-pred_scores_df = predictor.predict_scores(df_recent,
-                                          include_meta=True,
-                                          save_to="artifacts/pred_scores.csv")
-
-# (2) 勝率＆フェアオッズを保存
-pred_probs_df = predictor.predict_win_probs(scores_df=pred_scores_df,
-                                            include_meta=True,
-                                            save_to="artifacts/pred_win_probs.csv")
-# (3) 馬単/三連単の TOP‑K（PL 方式）を保存
-exa_df, tri_df = predictor.predict_exotics_topk(scores_df=pred_scores_df,
-                                                K=10,
-                                                tau=1.0,
-                                                include_meta=True,
-                                                save_exacta="artifacts/pred_exacta_topk.csv",
-                                                save_trifecta="artifacts/pred_trifecta_topk.csv")
-
-
-# In[ ]:
+# In[84]:
 
 
 print("[predict] Prediction completed and saved to artifacts directory.")

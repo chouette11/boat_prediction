@@ -77,9 +77,9 @@ initalldb:
 .PHONY: rebuild_alldb
 rebuild_alldb:
 
-	# ④ データを流し込む
-	python sql/parse_programs.py
-	python sql/parse_results.py
+# 	# ④ データを流し込む
+# 	python sql/parse_programs.py
+# 	python sql/parse_results.py
 		
 	# ⑤ マイグレーションを実行
 	psql -h $(DB_HOST) -U $(DB_USER) -d $(DB_NAME) -f sql/04_functions.sql
